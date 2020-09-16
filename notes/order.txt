@@ -1,0 +1,15 @@
+SELECT id, value
+FROM items
+ORDER BY id
+LIMIT 10
+
+type Result = {
+    id: Int,
+    value: String,
+}
+
+main :: Ctx, Int -> Table<Result>
+main = ctx, limit ->
+    ctx.items
+        |> order(['id'])
+        |> limit(limit)

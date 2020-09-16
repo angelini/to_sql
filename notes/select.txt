@@ -1,0 +1,13 @@
+SELECT id, upper(value) as up, lower(value) as low
+FROM items
+
+type Result = {
+    id: Int,
+    up: String,
+    low: String,
+}
+
+main :: Ctx -> Table<Result>
+main = ctx ->
+    ctx.items
+        |> select(r -> { id: r.id, up: upper(r.value), low: lower(r.value) })

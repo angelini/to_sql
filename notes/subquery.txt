@@ -1,0 +1,42 @@
+SELECT id, value
+FROM items
+WHERE value > (SELECT avg(value) FROM items)
+
+type Result {
+    id: Int,
+    value: String,
+}
+
+avg_value :: Table<{ value: Int }> -> Value<Int>
+avg_value :: table -> value(table, r -> r.value |> avg() |> first())
+
+main :: Ctx -> Table<Result>
+main = ctx ->
+    ctx.items
+        |> filter(r -> r.value > avg_value(ctx.items))
+
+first :: P : Primitive :: Col<P?> -> Value<P?>
+
+SELECT id, value
+FROM items
+WHERE id IN (1, 2, 3)
+
+main :: Ctx -> Table<Result>
+main = ctx ->
+    ctx.items
+        |> filter(r -> inList(r.id, [1, 2, 3]))
+
+inList :: P : Primitive :: Col<P>, List<P> -> Col<Bool>
+
+SELECT id, value
+FROM items
+WHERE id IN (SELECT id FROM valid)
+
+main :: Ctx -> Table<Result>
+main = Ctx -> {
+    let valid_ids = ctx.valid |> select(r -> { id: r.id })
+    ctx.items
+        |> filter(r -> in(r.id, valid_ids))
+}
+
+in :: P : Primtive, R : Row :: Col<P>, Table<R> -> Col<Bool>

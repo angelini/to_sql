@@ -1,0 +1,86 @@
+SELECT date_part('year', date) as year, sum(value) as sum
+FROM items
+WHERE value > 5
+GROUP BY date_part('year', date)
+
+type Result = {
+    year: Int,
+    sum: Int,
+}
+
+get_year :: Column<Date> -> Column<Int>
+get_year = date -> date_part(date, 'year')
+
+main :: Ctx, Int -> Table<Result>
+main = ctx, limit ->
+    ctx.items
+        |> filter(r -> r.value > limit)
+        |> group(r -> { year: get_year(r.date) })
+        |> agg(r -> { sum: sum(r.value) })
+
+main = ctx, limit ->
+    agg(
+        group(
+            filter(
+                ctx.items,
+                r -> r.value > limit
+            ) : Table<{ date: Date, value: Int }>,
+            r -> { year: get_year(r.date) }
+        ) : GroupedTable<{ year: Int }, { date: Date, value: Int }>,
+        r -> { sum: sum(r.value) }
+    ) : Table<{ year: Int, sum: Int }>
+
+main = ctx, limit -> {
+    // x1 :: Table<{ date: Date, value: Int }
+    let x1 = filter(ctx.items, r -> r.value > limit);
+    // x2 :: GroupedTable<{ year: Int }, { date: Date, value: Int }>
+    let x2 = group(x1, r -> { year: get_year(r.date) });
+    // return :: Table<Result>
+    agg(x2, r -> { sum: sum(r.value) })
+}
+
+main = ctx, limit -> {
+    let x1 = filter(ctx.items, r -> r.value > limit);
+    let x2 = group(x1, r -> { year: get_year(r.date) });
+    agg(x2, r -> { sum: sum(r.value) })
+}
+
+type Item = { date: Date, value: Int }
+
+forward type check:
+    let x1 = filter(ctx.items, r -> r.value > limit);
+        ctx.items :: Table<Item>
+        r -> r.value > limit :: Item -> Col<Bool>
+        x1 :: Table<Item>
+
+    let x2 = group(x1, r -> { year: get_year(r.date) });
+        x1 :: Table<Item>
+        r -> { year: get_year(r.date) } :: Item -> { year: Int }
+        x2 :: GroupedTable<{ year: Int }, { value: Int }>
+
+    let x3 = agg(x2, r -> [as(sum(r.value), 'sum')]);
+        x2 :: GroupedTable<{ year: Date }, { value: Int }>
+        r -> { sum: sum(r.value) } :: { value: Int } -> { sum: Int }
+        x3 :: Table<Result>
+
+reverse type check:
+    agg(x2, r -> [as(sum(r.value), 'sum')])
+        return :: Table<Result>
+        r -> { sum: sum(r.value) } :: { value: Int } -> { date: Date, sum: Int }
+        x2 :: GroupedTable<{ year: Int }, { value: Int }>
+
+    let x2 = group(x1, r -> { year: get_year(r.date) });
+        x2 :: GroupedTable<{ year: Int }, { value: Int }>
+        r -> { year: get_year(r.date) } :: Item -> { year: Int }
+        x1 :: Table<Item>
+
+    let x1 = filter(ctx.items, r -> r.value > limit);
+        x1 :: Table<Item>
+        r -> r.value > limit :: Item -> Col<Bool>
+        ctx.items :: Table<Item>
+
+select :: R1, R2 : Row :: Table<R1>, (R1 -> R2) -> Table<R2>
+filter :: R : Row :: Table<R>, (R -> Col<Bool>) -> Table<R>
+group :: R1, R2, R3 : Row :: Table<R1>, (R1 -> R2) -> GroupedTable<R2, R3>
+agg :: R1, R2, R3 : Row :: GroupedTable<R1, R2> -> Table<R3>
+sum :: Col<Int> -> Col<Int>

@@ -1,0 +1,17 @@
+SELECT i.id, i.value, s.status
+FROM items i
+JOIN status s
+  ON i.id = s.id
+
+type Result = {
+    id: Int,
+    value: String,
+    status: String,
+}
+
+main :: Ctx -> Table<Result>
+main = ctx ->
+    ctx.items
+        |> join(ctx.status, (i, s -> i.id == s.id))
+
+join :: R1, R2, R3 : Row :: Table<R1>, Table<R2>, (R1, R2 -> Col<Bool>) -> Table<R3>

@@ -1,0 +1,31 @@
+SELECT CASE
+    WHEN value > 5 THEN 'good'
+    WHEN value > 0 THEN 'ok'
+    ELSE 'bad'
+END status
+FROM items
+
+type Result = {
+    status: String
+}
+
+main :: Ctx, Int, Int -> Table<Result>
+main = ctx, low, high ->
+    {
+        status: case ctx.items { r ->
+                    r.value > high: col('good'),
+                    r.value > low: col('ok'),
+                    _: col('bad'),
+                }
+    }
+
+main = ctx, low, high -> {
+    let status = case ctx.items { r ->
+        r.value > high: col('good'),
+        r.value > low: col('ok'),
+        _: col('bad'),
+    };
+    { status: status }
+}
+
+col :: P : Primitive, T : P | Null<P> :: T -> Col<T>

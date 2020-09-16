@@ -1,0 +1,13 @@
+SELECT value
+FROM items
+WHERE value IS NOT NULL
+
+type Result = {
+    value: Int
+}
+
+main :: Ctx -> Table<Result>
+main = ctx -> ctx.items
+                  |> filter(r -> not(is_null(r.value)))
+
+ctx.items :: Table<{ value: Null<Int> }>
