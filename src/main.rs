@@ -1,65 +1,52 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
+mod ast;
+mod sql;
 mod types;
 
-#[derive(Debug, Eq, PartialEq)]
-enum ColumnType {
-    Bool,
-    Int,
-    Float,
-    String,
-    Date,
-}
+use ast::{Expression, Identifier, TypeExpression};
+use types::Type;
 
-#[derive(Debug)]
-struct TableDefinition {
-    exists: bool,
-    name: Option<String>,
-    schema: BTreeMap<String, ColumnType>,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-enum BoolOp {
-    And,
-    Or,
-}
-
-#[derive(Debug, Eq, PartialEq)]
-enum Cmp {
-    Equal,
-    NotEqual,
-    GreaterThan,
-    GreaterThanEqual,
-    LessThan,
-    LessThanEqual,
-}
-
-#[derive(Debug)]
-enum SelectExpression {
-    Name(String),
-    Function(String, Vec<SelectExpression>),
-    Cmp(Cmp, Box<(SelectExpression, SelectExpression)>),
-    Bool(BoolOp, Box<(SelectExpression, SelectExpression)>),
-}
-
-#[derive(Debug)]
-enum Filter {
-    Cmp(Cmp, Box<(Filter, Filter)>),
-    Bool(BoolOp, Box<(Filter, Filter)>),
-}
-
-#[derive(Debug)]
-struct TableExpression {
-    definition: TableDefinition,
-    selects: BTreeMap<String, SelectExpression>,
-    wheres: Vec<Filter>,
-    limit: Option<usize>,
-    order: Vec<String>,
-}
-
-#[derive(Debug)]
 struct Context {
-    tables: HashMap<String, TableDefinition>,
+    types: HashMap<Identifier, Type>,
+    expressions: HashMap<Identifier, Expression>,
+}
+
+impl Context {
+    fn new() -> Context {
+        Context {
+            types: HashMap::new(),
+            expressions: HashMap::new(),
+        }
+    }
+
+    fn add_type(&mut self, ident: Identifier, typ: Type) {
+        self.types.insert(ident, typ);
+    }
+
+    fn add_expression(&mut self, ident: Identifier, expression: Expression) {
+        self.expressions.insert(ident, expression);
+    }
+}
+
+fn type_check(input: Vec<Expression>) -> Result<Context, String> {
+    let mut ctx = Context::new();
+
+    for expression in input {
+        match expression {
+            Expression::Type(type_expression) => {
+                match type_expression {
+                    TypeExpression::Alias(ident, typ) => ctx.add_type(ident, typ),
+                    TypeExpression::Function(ident, typ) => ctx.add_type(ident, typ),
+                    _ => unimplemented!()
+                };
+                unimplemented!()
+            },
+            _ => unimplemented!()
+        }
+    }
+
+    Ok(ctx)
 }
 
 fn main() {

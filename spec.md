@@ -73,7 +73,6 @@ select :: R1, R2 : Row :: Table<R1>, (R1 -> R2) -> Table<R2>
 
 ### Type classes
 
-- `P : Primitive :: Null<P>`
 - `P : Primitive :: Value<P?>`
 - `P : Primitive :: Col<P?>`
 - `R : Row :: Table<R>`
@@ -82,17 +81,11 @@ select :: R1, R2 : Row :: Table<R1>, (R1 -> R2) -> Table<R2>
 
 ### Nullable
 
-Nullable column: `Col<Null<Int>>`
+The `?` suffix is used to indicate a nullable `Primitive` value.
+
+Nullable column: `Col<Int?>`
 
 Non-nullable column: `Col<Int>`
-
-The union of `Null<T>` and `T` can be shortened with a `?` suffix
-
-```
-type Int? = Int | Null<Int>
-
-default :: P : Primitive :: Col<P?>, Int -> Col<P>
-```
 
 ### Functions
 
@@ -176,7 +169,7 @@ Row access: `other.'with space'`
 
 `capitalize :: Col<String> -> Col<String>`
 
-`is_null :: P : Primitive :: Col<Null<P>> -> Col<Bool>`
+`is_null :: P : Primitive :: Col<P?> -> Col<Bool>`
 
 `first :: P : Primitive :: Col<P?> -> Value<P?>`
 
