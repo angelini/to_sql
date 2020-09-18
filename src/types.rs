@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
+use std::fmt;
 
-#[derive(Debug, Eq, PartialEq)]
+use crate::identifier::{ident, Identifier};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Base {
     Bool(bool),
     Int(bool),
@@ -9,32 +12,32 @@ pub enum Base {
     Date(bool),
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Kind {
     Primitive,
     Column,
     Row,
 }
 
-#[derive(Debug, Eq, PartialEq)]
-enum Primitive {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Primitive {
     Known(Base),
     Unknown(usize, bool),
 }
 
-#[derive(Debug, Eq, PartialEq)]
-enum Column {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Column {
     Known(Base),
     Unknown(usize, bool),
 }
 
-#[derive(Debug, Eq, PartialEq)]
-enum Row {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Row {
     Known(BTreeMap<String, Base>),
     Unknown(usize),
 }
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Type {
     Value(Primitive),
     Column(Column),
@@ -44,6 +47,21 @@ pub enum Type {
     Function(Vec<Kind>, Vec<Type>, Box<Type>),
     List(Box<Type>),
     Union(Vec<Type>),
+}
+
+#[derive(Debug)]
+pub enum TypeError {
+    NotAsExpected(Type, Type),
+    Missing(Identifier)
+}
+
+impl fmt::Display for TypeError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            TypeError::NotAsExpected(expected, actual) => write!(f, "expected: '{:?}', actual: '{:?}'", expected, actual),
+            TypeError::Missing(ident) => write!(f, "missing type for '{:?}'", ident)
+        }
+    }
 }
 
 fn unknown_value(id: usize, nullable: bool) -> Type {
@@ -76,19 +94,34 @@ fn unknown_table(id: usize) -> Type {
     Type::Table(Row::Unknown(id))
 }
 
+#[derive(Debug)]
 pub struct TypeContext {
-    definitions: HashMap<String, Type>,
+    types: HashMap<Identifier, Type>,
 }
 
 impl TypeContext {
-    fn new() -> TypeContext {
+    pub fn new() -> TypeContext {
         TypeContext {
-            definitions: HashMap::new(),
+            types: HashMap::new(),
         }
     }
 
-    fn add<S: Into<String>>(&mut self, key: S, typ: Type) {
-        self.definitions.insert(key.into(), typ);
+    pub fn add(&mut self, id: Identifier, typ: Type) {
+        self.types.insert(id, typ);
+    }
+
+    pub fn get(&self, id: &Identifier) -> Result<&Type, TypeError> {
+        self.types.get(id).ok_or_else(|| TypeError::Missing(id.clone()))
+    }
+}
+
+impl fmt::Display for TypeContext {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "Type Context:")?;
+        for (id, typ) in &self.types {
+            writeln!(f, "    {}: {:?}", id, typ)?;
+        }
+        write!(f, "")
     }
 }
 
@@ -96,7 +129,7 @@ fn std_column_functions(ctx: &mut TypeContext) {
     // col :: P : Primitive :: P -> Col<P>
     {
         ctx.add(
-            "col",
+            ident("col"),
             func(
                 vec![Kind::Primitive],
                 vec![unknown_value(0, false)],
@@ -114,7 +147,7 @@ fn std_column_functions(ctx: &mut TypeContext) {
     // default :: P : Primitive :: Col<P?>, P -> Col<P>
     {
         ctx.add(
-            "default",
+            ident("default"),
             func(
                 vec![Kind::Primitive],
                 vec![unknown_col(0, true), unknown_value(0, false)],
@@ -128,7 +161,7 @@ fn std_table_functions(ctx: &mut TypeContext) {
     // select :: R1, R2 : Row :: Table<R1>, (R1 -> R2) -> Table<R2>
     {
         ctx.add(
-            "select",
+            ident("select"),
             func(
                 vec![Kind::Row, Kind::Row],
                 vec![
@@ -147,7 +180,7 @@ fn std_table_functions(ctx: &mut TypeContext) {
     // filter :: R : Row :: Table<R>, (R -> Col<Bool>) -> Table<R>
     {
         ctx.add(
-            "filter",
+            ident("filter"),
             func(
                 vec![Kind::Row],
                 vec![
@@ -169,4 +202,9 @@ pub fn std() -> TypeContext {
     std_column_functions(&mut ctx);
     std_table_functions(&mut ctx);
     ctx
+}
+
+pub fn example_type() -> Type {
+    // row(vec![("a", Base::Int(false)), ("b", Base::Bool(false))])
+    Type::Value(Primitive::Known(Base::Int(false)))
 }

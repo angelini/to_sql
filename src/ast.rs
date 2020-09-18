@@ -1,12 +1,11 @@
-use std::collections::BTreeMap;
-
 use chrono::naive::NaiveDate;
 use rust_decimal::Decimal;
 
-use crate::types::{Base, Type};
+use crate::identifier::Identifier;
+use crate::types::{Base, Primitive, Type, TypeContext, TypeError};
 
-#[derive(Debug, Eq, PartialEq)]
-enum Constant {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Constant {
     Bool(bool),
     Int(usize),
     Float(Decimal),
@@ -14,36 +13,49 @@ enum Constant {
     Date(NaiveDate),
 }
 
-#[derive(Debug, Eq, Hash, PartialEq)]
-pub struct Identifier(String);
-
-#[derive(Debug, Eq, PartialEq)]
-struct Assignment(Identifier, Expression);
-
-// Row: { a: A, b: B }
-// Alias: type A = B
-// Function: f :: P: Primitive :: P? -> P
-
-#[derive(Debug, Eq, PartialEq)]
-pub enum TypeExpression {
-    Row(Type),
-    Alias(Identifier, Type),
-    Function(Identifier, Type)
+impl Constant {
+    fn get_type(&self) -> Type {
+        let base = match self {
+            Constant::Bool(_) => Base::Bool(false),
+            Constant::Int(_) => Base::Int(false),
+            Constant::Float(_) => Base::Float(false),
+            Constant::String(_) => Base::String(false),
+            Constant::Date(_) => Base::Date(false),
+        };
+        Type::Value(Primitive::Known(base))
+    }
 }
 
-// Constant: 5
-// Variable: a
-// Application: test(a, 5)
-// Block: { let a = 1; a }
-// Function: a, b -> a
-
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Expression {
     Constant(Constant),
     Variable(Identifier),
-    Assignment(Box<Assignment>),
+    Assignment(Identifier, Box<Expression>),
     Application(Identifier, Vec<Expression>),
-    Block(Vec<Assignment>, Box<Expression>),
+    Block(Vec<(Identifier, Expression)>, Box<Expression>),
     Function(Vec<Identifier>, Box<Expression>),
-    Type(TypeExpression),
+    Type(Identifier, Type),
+}
+
+impl Expression {
+    pub fn check_type(&self, ctx: &TypeContext, expected: &Type) -> Result<(), TypeError> {
+        match self {
+            Expression::Constant(constant) => Self::compare_types(expected, &constant.get_type()),
+            Expression::Variable(ident) => Self::compare_types(expected, ctx.get(ident)?),
+            Expression::Assignment(ident, expression) => expression.check_type(ctx, ctx.get(ident)?),
+            _ => unimplemented!()
+        }
+    }
+
+    fn compare_types(expected: &Type, actual: &Type) -> Result<(), TypeError> {
+        if actual == expected {
+            Ok(())
+        } else {
+            Err(TypeError::NotAsExpected(expected.clone(), actual.clone()))
+        }
+    }
+}
+
+pub fn example_constant() -> Expression {
+    Expression::Constant(Constant::Int(5))
 }
