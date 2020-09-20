@@ -22,9 +22,7 @@ impl fmt::Display for InputError {
             InputError::InvalidRoot(expression) => {
                 write!(f, "invalid root expression: {:?}", expression)
             }
-            InputError::Type(type_error) => {
-                write!(f, "type error: {}", type_error)
-            }
+            InputError::Type(type_error) => write!(f, "type error: {}", type_error),
         }
     }
 }
@@ -67,7 +65,7 @@ impl fmt::Display for Context {
         writeln!(f, "{}", self.types)?;
         writeln!(f, "Implementations:")?;
         for (id, expression) in &self.impls {
-            writeln!(f, "    {}: {:?}", id, expression)?;
+            writeln!(f, "  {}: {:?}", id, expression)?;
         }
         write!(f, "")
     }
@@ -83,7 +81,7 @@ fn walk_input(input: Vec<Expression>) -> Result<Context, InputError> {
                 ctx.check(&ident, &expression)?;
                 ctx.add_impl(ident, *expression)
             }
-            _ => return Err(InputError::InvalidRoot(expression))
+            _ => return Err(InputError::InvalidRoot(expression)),
         }
     }
 
@@ -92,8 +90,28 @@ fn walk_input(input: Vec<Expression>) -> Result<Context, InputError> {
 
 fn main() -> Result<(), InputError> {
     let input = vec![
-        Expression::Type(ident("example"), types::example_type()),
-        Expression::Assignment(ident("example"), Box::new(ast::example_constant())),
+        Expression::Type(ident("i"), types::example_int()),
+        Expression::Assignment(ident("i"), Box::new(ast::example_int())),
+        Expression::Type(ident("func"), types::example_func()),
+        Expression::Type(ident("value"), types::example_bool()),
+        Expression::Assignment(
+            ident("value"),
+            Box::new(Expression::Application(
+                ident("func"),
+                vec![Expression::Variable(ident("i"))],
+            )),
+        ),
+        Expression::Type(ident("block"), types::example_int()),
+        Expression::Assignment(
+            ident("block"),
+            Box::new(Expression::Block(
+                vec![
+                    Expression::Type(ident("a"), types::example_int()),
+                    Expression::Assignment(ident("a"), Box::new(ast::example_int())),
+                ],
+                Box::new(Expression::Variable(ident("a"))),
+            )),
+        ),
     ];
 
     let ctx = walk_input(input)?;

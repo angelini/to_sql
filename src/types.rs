@@ -12,6 +12,19 @@ pub enum Base {
     Date(bool),
 }
 
+impl Base {
+    fn captures(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Base::Bool(expected), Base::Bool(actual))
+            | (Base::Int(expected), Base::Int(actual))
+            | (Base::Float(expected), Base::Float(actual))
+            | (Base::String(expected), Base::String(actual))
+            | (Base::Date(expected), Base::Date(actual)) => *expected || !actual,
+            _ => false,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Kind {
     Primitive,
@@ -32,8 +45,31 @@ pub enum Column {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RowSchema(BTreeMap<String, Base>);
+
+impl RowSchema {
+    fn from_vec<S: Into<String>>(columns: Vec<(S, Base)>) -> RowSchema {
+        RowSchema(columns.into_iter().map(|(k, v)| (k.into(), v)).collect())
+    }
+
+    fn captures(&self, other: &Self) -> bool {
+        for (col_name, expected) in &self.0 {
+            match other.0.get(col_name) {
+                Some(actual) => {
+                    if !expected.captures(actual) {
+                        return false;
+                    }
+                }
+                None => return false,
+            }
+        }
+        true
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Row {
-    Known(BTreeMap<String, Base>),
+    Known(RowSchema),
     Unknown(usize),
 }
 
@@ -49,19 +85,43 @@ pub enum Type {
     Union(Vec<Type>),
 }
 
+impl Type {
+    pub fn captures(&self, actual: &Self) -> bool {
+        match (self, actual) {
+            (Type::Value(Primitive::Known(expected)), Type::Value(Primitive::Known(actual)))
+            | (Type::Column(Column::Known(expected)), Type::Column(Column::Known(actual))) => {
+                expected.captures(actual)
+            }
+            (Type::Row(Row::Known(expected)), Type::Row(Row::Known(actual)))
+            | (Type::Table(Row::Known(expected)), Type::Table(Row::Known(actual))) => {
+                expected.captures(actual)
+            }
+            _ => unimplemented!(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum TypeError {
+    Missing(Identifier),
+    NotAFunction(Identifier),
     NotAsExpected(Type, Type),
-    Missing(Identifier)
 }
 
 impl fmt::Display for TypeError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            TypeError::NotAsExpected(expected, actual) => write!(f, "expected: '{:?}', actual: '{:?}'", expected, actual),
-            TypeError::Missing(ident) => write!(f, "missing type for '{:?}'", ident)
+            TypeError::Missing(ident) => write!(f, "missing type for: '{:?}'", ident),
+            TypeError::NotAFunction(ident) => write!(f, "not a function: '{:?}'", ident),
+            TypeError::NotAsExpected(expected, actual) => {
+                write!(f, "expected: '{:?}', actual: '{:?}'", expected, actual)
+            }
         }
     }
+}
+
+fn value(base: Base) -> Type {
+    Type::Value(Primitive::Known(base))
 }
 
 fn unknown_value(id: usize, nullable: bool) -> Type {
@@ -77,9 +137,7 @@ fn unknown_col(id: usize, nullable: bool) -> Type {
 }
 
 fn row<S: Into<String>>(columns: Vec<(S, Base)>) -> Type {
-    Type::Row(Row::Known(
-        columns.into_iter().map(|(k, v)| (k.into(), v)).collect(),
-    ))
+    Type::Row(Row::Known(RowSchema::from_vec(columns)))
 }
 
 fn unknown_row(id: usize) -> Type {
@@ -94,7 +152,7 @@ fn unknown_table(id: usize) -> Type {
     Type::Table(Row::Unknown(id))
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct TypeContext {
     types: HashMap<Identifier, Type>,
 }
@@ -111,7 +169,9 @@ impl TypeContext {
     }
 
     pub fn get(&self, id: &Identifier) -> Result<&Type, TypeError> {
-        self.types.get(id).ok_or_else(|| TypeError::Missing(id.clone()))
+        self.types
+            .get(id)
+            .ok_or_else(|| TypeError::Missing(id.clone()))
     }
 }
 
@@ -119,7 +179,7 @@ impl fmt::Display for TypeContext {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "Type Context:")?;
         for (id, typ) in &self.types {
-            writeln!(f, "    {}: {:?}", id, typ)?;
+            writeln!(f, "  {}: {:?}", id, typ)?;
         }
         write!(f, "")
     }
@@ -204,7 +264,18 @@ pub fn std() -> TypeContext {
     ctx
 }
 
-pub fn example_type() -> Type {
-    // row(vec![("a", Base::Int(false)), ("b", Base::Bool(false))])
-    Type::Value(Primitive::Known(Base::Int(false)))
+pub fn example_int() -> Type {
+    value(Base::Int(false))
+}
+
+pub fn example_bool() -> Type {
+    value(Base::Bool(true))
+}
+
+pub fn example_func() -> Type {
+    func(
+        vec![],
+        vec![value(Base::Int(false))],
+        value(Base::Bool(true)),
+    )
 }

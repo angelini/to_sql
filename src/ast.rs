@@ -32,7 +32,7 @@ pub enum Expression {
     Variable(Identifier),
     Assignment(Identifier, Box<Expression>),
     Application(Identifier, Vec<Expression>),
-    Block(Vec<(Identifier, Expression)>, Box<Expression>),
+    Block(Vec<Expression>, Box<Expression>),
     Function(Vec<Identifier>, Box<Expression>),
     Type(Identifier, Type),
 }
@@ -42,13 +42,47 @@ impl Expression {
         match self {
             Expression::Constant(constant) => Self::compare_types(expected, &constant.get_type()),
             Expression::Variable(ident) => Self::compare_types(expected, ctx.get(ident)?),
-            Expression::Assignment(ident, expression) => expression.check_type(ctx, ctx.get(ident)?),
-            _ => unimplemented!()
+            Expression::Assignment(ident, expression) => {
+                expression.check_type(ctx, ctx.get(ident)?)
+            }
+            Expression::Application(ident, arg_expressions) => {
+                if let Type::Function(_, expected_args, actual) = ctx.get(ident)? {
+                    for (expression, expected_arg) in
+                        arg_expressions.iter().zip(expected_args.iter())
+                    {
+                        expression.check_type(ctx, expected_arg)?;
+                    }
+                    Self::compare_types(expected, actual)
+                } else {
+                    Err(TypeError::NotAFunction(ident.clone()))
+                }
+            }
+            Expression::Block(assignments, last_expression) => {
+                let mut nested_ctx = ctx.clone();
+                for assignment in assignments {
+                    match assignment {
+                        Expression::Type(ident, typ) => nested_ctx.add(ident.clone(), typ.clone()),
+                        Expression::Assignment(ident, expression) => {
+                            expression.check_type(&nested_ctx, nested_ctx.get(ident)?)?
+                        }
+                        _ => unimplemented!(),
+                    }
+                }
+                last_expression.check_type(&nested_ctx, expected)
+            }
+            Expression::Function(arguments, expression) => {
+                let mut nested_ctx = ctx.clone();
+                for argument in arguments {
+                    nested_ctx.add(argument.clone(), ctx.get(argument)?.clone())
+                }
+                expression.check_type(&nested_ctx, expected)
+            }
+            _ => unimplemented!(),
         }
     }
 
     fn compare_types(expected: &Type, actual: &Type) -> Result<(), TypeError> {
-        if actual == expected {
+        if expected.captures(actual) {
             Ok(())
         } else {
             Err(TypeError::NotAsExpected(expected.clone(), actual.clone()))
@@ -56,6 +90,10 @@ impl Expression {
     }
 }
 
-pub fn example_constant() -> Expression {
+pub fn example_int() -> Expression {
     Expression::Constant(Constant::Int(5))
+}
+
+pub fn example_bool() -> Expression {
+    Expression::Constant(Constant::Bool(true))
 }
