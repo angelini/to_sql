@@ -1,5 +1,6 @@
 mod ast;
 mod identifier;
+mod parser;
 mod sql;
 mod types;
 

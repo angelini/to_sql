@@ -122,6 +122,7 @@ name = "to_sql"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "lazy_static",
  "regex",
  "rust_decimal",
 ]

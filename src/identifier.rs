@@ -1,14 +1,21 @@
 use std::fmt;
 
+use lazy_static::lazy_static;
 use regex::Regex;
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct Identifier(String);
 
 impl Identifier {
-    fn from_string(value: String) -> Option<Identifier> {
-        let re = Regex::new(r"^[a-zA-Z0-9_\-]+$").unwrap();
-        match re.is_match(&value) {
+    pub fn check(value: &str) -> bool {
+        lazy_static! {
+            static ref RE: Regex = Regex::new(r"^[a-zA-Z0-9_\-]+$").unwrap();
+        }
+        return RE.is_match(value)
+    }
+
+    pub fn from_string(value: String) -> Option<Identifier> {
+        match Self::check(&value) {
             true => Some(Identifier(value)),
             false => None
         }
