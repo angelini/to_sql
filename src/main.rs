@@ -120,7 +120,8 @@ fn main() -> Result<(), InputError> {
 
     parser::example("'true'    5.5 hello4_worl");
     parser::example_assignment("ab = 5");
-    parser::example_repeat("foo , bar");
+    parser::example_repeat("foo, bar");
+    parser::example_application("foo(bar, baz)");
 
     Ok(())
 }

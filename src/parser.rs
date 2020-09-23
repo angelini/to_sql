@@ -11,9 +11,12 @@ use crate::identifier::Identifier;
 #[derive(Debug)]
 enum Token {
     Constant(Constant),
-    Variable(Identifier),
+    Identifier(Identifier),
     Assignment(Box<Token>, Box<Token>),
     Application(Box<Token>, Vec<Token>),
+    Function(Vec<Token>, Vec<Token>),
+    Kind(Box<Token>, Box<Token>),
+    Type(Box<Token>, Vec<Token>, Box<Token>),
 }
 
 type Tokens = Option<Vec<Token>>;
@@ -51,7 +54,7 @@ impl Clone for Box<dyn Parser> {
 
 impl<T> From<T> for Box<dyn Parser>
 where
-    T: 'static + Parser
+    T: 'static + Parser,
 {
     fn from(parser: T) -> Self {
         Box::new(parser)
@@ -71,6 +74,23 @@ impl Parser for WsParser {
             None => fail(input),
         }
     }
+}
+
+#[derive(Clone, Debug)]
+struct OptionalParser(Box<dyn Parser>);
+
+impl Parser for OptionalParser {
+    fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
+        let (tokens, rest) = self.0.take(input);
+        match tokens {
+            Some(_) => (tokens, rest),
+            None => (Some(vec![]), rest),
+        }
+    }
+}
+
+fn optional<P: Into<Box<dyn Parser>>>(parser: P) -> OptionalParser {
+    OptionalParser(parser.into())
 }
 
 #[derive(Clone, Debug)]
@@ -141,7 +161,12 @@ impl Parser for RepeatParser {
         let mut remaining = input;
 
         loop {
-            let (tokens, rest) = chain!(self.parser.clone(), WsParser, self.delimiter.clone()).take(remaining);
+            let (tokens, rest) = chain!(
+                self.parser.clone(),
+                optional(WsParser),
+                self.delimiter.clone()
+            )
+            .take(remaining);
             remaining = rest;
 
             match tokens {
@@ -153,7 +178,7 @@ impl Parser for RepeatParser {
                     if let Some(mut ts) = tokens {
                         all_tokens.push(ts.pop().unwrap())
                     }
-                    return (Some(all_tokens), rest)
+                    return (Some(all_tokens), rest);
                 }
             }
         }
@@ -162,8 +187,11 @@ impl Parser for RepeatParser {
 
 macro_rules! repeat {
     ($parser:expr, $delimiter:expr) => {
-        RepeatParser{ parser: $parser.into(), delimiter: $delimiter.into() }
-    }
+        RepeatParser {
+            parser: $parser.into(),
+            delimiter: $delimiter.into(),
+        }
+    };
 }
 
 #[derive(Clone, Debug)]
@@ -291,9 +319,9 @@ impl Parser for ConstantParser {
 }
 
 #[derive(Clone, Debug)]
-struct VariableParser;
+struct IndentifierParser;
 
-impl Parser for VariableParser {
+impl Parser for IndentifierParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
         lazy_static! {
             static ref RE: Regex = Regex::new(r"^[a-zA-Z0-9_\-]+").unwrap();
@@ -301,7 +329,7 @@ impl Parser for VariableParser {
         match RE.find(input) {
             Some(m) => {
                 let ident = Identifier::new(input[0..m.end()].to_string());
-                (Some(vec![Token::Variable(ident)]), &input[m.end()..])
+                (Some(vec![Token::Identifier(ident)]), &input[m.end()..])
             }
             None => fail(input),
         }
@@ -315,7 +343,7 @@ impl Parser for AssignmentParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
         // FIXME: Must end with an ExpressionParser
         let (tokens, rest) = chain!(
-            VariableParser,
+            IndentifierParser,
             WsParser,
             fixed("="),
             WsParser,
@@ -333,13 +361,38 @@ impl Parser for AssignmentParser {
     }
 }
 
+#[derive(Clone, Debug)]
+struct ApplicationParser;
+
+impl Parser for ApplicationParser {
+    fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
+        // FIXME: Must repeat with an ExpressionParser
+        let (tokens, rest) = chain!(
+            IndentifierParser,
+            fixed("("),
+            optional(WsParser),
+            repeat!(IndentifierParser, fixed(",")),
+            optional(WsParser),
+            fixed(")")
+        )
+        .take(input);
+        match tokens {
+            Some(mut ts) => {
+                let ident = ts.remove(1);
+                (Some(vec![Token::Application(Box::new(ident), ts)]), rest)
+            }
+            None => fail(input)
+        }
+    }
+}
+
 pub fn example(input: &str) {
     let parser = chain!(
         ConstantParser,
         WsParser,
         ConstantParser,
         WsParser,
-        VariableParser
+        IndentifierParser
     );
     println!("{:?}", parser.take(input))
 }
@@ -350,6 +403,11 @@ pub fn example_assignment(input: &str) {
 }
 
 pub fn example_repeat(input: &str) {
-    let parser = repeat!(VariableParser, fixed(","));
+    let parser = repeat!(IndentifierParser, fixed(","));
+    println!("{:?}", parser.take(input))
+}
+
+pub fn example_application(input: &str) {
+    let parser = ApplicationParser;
     println!("{:?}", parser.take(input))
 }
