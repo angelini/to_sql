@@ -117,5 +117,10 @@ fn main() -> Result<(), InputError> {
 
     let ctx = walk_input(input)?;
     println!("{}", ctx);
+
+    parser::example("'true'    5.5 hello4_worl");
+    parser::example_assignment("ab = 5");
+    parser::example_repeat("foo , bar");
+
     Ok(())
 }
