@@ -1,5 +1,5 @@
 mod ast;
-mod identifier;
+mod base;
 mod parser;
 mod sql;
 mod types;
@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use ast::Expression;
-use identifier::{ident, Identifier};
+use base::{ident, Identifier};
 use types::{Type, TypeContext, TypeError};
 
 #[derive(Debug)]
@@ -118,10 +118,46 @@ fn main() -> Result<(), InputError> {
     let ctx = walk_input(input)?;
     println!("{}", ctx);
 
-    parser::example("'true'    5.5 hello4_worl");
-    parser::example_assignment("ab = 5");
-    parser::example_repeat("foo, bar");
-    parser::example_application("foo(bar, baz)");
+    for expression_input in &[
+        "5",
+        "hello_world",
+        "true",
+        "'true'",
+        "foo(bar, baz, q)",
+        "(foo, bar) -> 1",
+        "{a}",
+        "{'foo'; a}",
+        "{a; 'foo'; 1}"
+    ] {
+        println!("Expression Input: {}", expression_input);
+        match parser::parse_expression(expression_input) {
+            Some((token, rest)) => {
+                println!("Token:            {:?}", token);
+                println!("Rest:             '{}'", rest);
+            }
+            None => println!("Error")
+        };
+        println!("");
+    }
+
+    for expression_input in &[
+        "{a: B}",
+        "Foo",
+        "type Foo = Bar",
+        "type Foo = {a :B, cd: De}",
+        "foo :: Int, Bool -> Int",
+        "bar :: R : Row :: Int -> Table<R>"
+    ] {
+        println!("Type Input: {}", expression_input);
+        match parser::parse_type(expression_input) {
+            Some((token, rest)) => {
+                println!("Token:      {:?}", token);
+                println!("Rest:       '{}'", rest);
+            }
+            None => println!("Error")
+        };
+        println!("");
+    }
 
     Ok(())
 }

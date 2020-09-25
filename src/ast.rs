@@ -1,7 +1,7 @@
 use chrono::naive::NaiveDate;
 use rust_decimal::Decimal;
 
-use crate::identifier::Identifier;
+use crate::base::Identifier;
 use crate::types::{Base, Primitive, Type, TypeContext, TypeError};
 
 #[derive(Clone, Debug, Eq, PartialEq)]

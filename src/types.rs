@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
-use crate::identifier::{ident, Identifier};
+use crate::base::{ident, Identifier};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Base {
