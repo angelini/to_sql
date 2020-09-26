@@ -54,3 +54,18 @@ impl TypeName {
         TypeName(value)
     }
 }
+
+impl fmt::Display for TypeName {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+pub fn type_name<S: Into<String>>(value_s: S) -> TypeName {
+    lazy_static! {
+        static ref RE: Regex = Regex::new(r"^[A-Z][a-zA-Z0-9]*(<[A-Z][a-zA-Z0-9]*>)?$").unwrap();
+    }
+    let value = value_s.into();
+    assert!(RE.is_match(&value), "Invalid type name");
+    TypeName::new(value)
+}

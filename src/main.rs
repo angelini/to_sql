@@ -8,16 +8,16 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use ast::Expression;
-use base::{ident, Identifier};
+use base::{ColumnName, Identifier};
 use parser::Token;
-use types::{Type, TypeContext, TypeError};
+use types::{Row, Type, TypeContext, TypeError};
 
 #[derive(Debug)]
 struct ParseError(String);
 
 #[derive(Debug)]
 enum InputError {
-    InvalidRoot(Expression),
+    InvalidRoot(Token),
     Parse(ParseError),
     Type(TypeError),
 }
@@ -28,7 +28,9 @@ impl fmt::Display for InputError {
             InputError::InvalidRoot(expression) => {
                 write!(f, "invalid root expression: {:?}", expression)
             }
-            InputError::Parse(parse_error) => write!(f, "error parsing: '''\n{}\n'''", parse_error.0),
+            InputError::Parse(parse_error) => {
+                write!(f, "error parsing: '''\n{}\n'''", parse_error.0)
+            }
             InputError::Type(type_error) => write!(f, "type error: {}", type_error),
         }
     }
@@ -46,34 +48,90 @@ impl From<TypeError> for InputError {
     }
 }
 
+type Result<T> = std::result::Result<T, InputError>;
+
 #[derive(Debug)]
-struct Context {
+struct Runtime {
     types: TypeContext,
     impls: BTreeMap<Identifier, Expression>,
 }
 
-impl Context {
-    fn new() -> Context {
-        Context {
+impl Runtime {
+    fn new() -> Self {
+        Runtime {
             types: types::std(),
             impls: BTreeMap::new(),
         }
     }
 
-    fn add_type(&mut self, ident: Identifier, typ: Type) {
-        self.types.add(ident, typ)
+    fn add_type_token(&mut self, token: Token) -> Result<()> {
+        match token {
+            Token::TypeAssignment(ident, type_token) => {
+                self.types.add(ident, self.as_type(*type_token)?)
+            }
+            _ => return Err(InputError::InvalidRoot(token)),
+        };
+        Ok(())
     }
 
-    fn add_impl(&mut self, ident: Identifier, expression: Expression) {
-        self.impls.insert(ident, expression);
+    fn add_expression_token(&mut self, token: Token) -> Result<()> {
+        match token {
+            Token::Assignment(ident, expression_token) => {
+                let expression = self.as_expression(*expression_token)?;
+                expression.check_type(&self.types, self.types.get(&ident)?)?;
+                self.impls.insert(ident, expression)
+            }
+            _ => return Err(InputError::InvalidRoot(token)),
+        };
+        Ok(())
     }
 
-    fn check(&self, ident: &Identifier, expression: &Expression) -> Result<(), TypeError> {
-        expression.check_type(&self.types, self.types.get(ident)?)
+    fn as_type(&self, token: Token) -> Result<Type> {
+        Ok(match token {
+            Token::TypeName(name) => self.types.lookup_alias(&name)?.clone(),
+            Token::RowType(r) => {
+                let row_types = r
+                    .into_iter()
+                    .map(|(col_name, type_name)| {
+                        Ok((col_name, self.types.lookup_alias(&type_name)?.clone()))
+                    })
+                    .collect::<Result<BTreeMap<ColumnName, Type>>>()?;
+                Type::Row(Row::from_value_types(row_types))
+            }
+            _ => unimplemented!(),
+        })
+    }
+
+    fn as_expression(&self, token: Token) -> Result<Expression> {
+        Ok(match token {
+            Token::Constant(constant) => Expression::Constant(constant),
+            Token::Identifier(ident) => Expression::Variable(ident),
+            Token::Application(ident, arguments) => Expression::Application(
+                ident,
+                arguments
+                    .into_iter()
+                    .map(|arg| Ok(self.as_expression(arg)?))
+                    .collect::<Result<Vec<Expression>>>()?,
+            ),
+            Token::Block(mut expressions) => {
+                let last = self.as_expression(expressions.pop().unwrap())?;
+                Expression::Block(
+                    expressions
+                        .into_iter()
+                        .map(|expr| Ok(self.as_expression(expr)?))
+                        .collect::<Result<Vec<Expression>>>()?,
+                    Box::new(last),
+                )
+            }
+            Token::Function(arguments, body) => {
+                Expression::Function(arguments, Box::new(self.as_expression(*body)?))
+            }
+            _ => unimplemented!(),
+        })
     }
 }
 
-impl fmt::Display for Context {
+impl fmt::Display for Runtime {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "{}", self.types)?;
         writeln!(f, "Implementations:")?;
@@ -84,24 +142,7 @@ impl fmt::Display for Context {
     }
 }
 
-fn walk_input(input: Vec<Expression>) -> Result<Context, InputError> {
-    let mut ctx = Context::new();
-
-    for expression in input {
-        match expression {
-            Expression::Type(ident, typ) => ctx.add_type(ident, typ),
-            Expression::Assignment(ident, expression) => {
-                ctx.check(&ident, &expression)?;
-                ctx.add_impl(ident, *expression)
-            }
-            _ => return Err(InputError::InvalidRoot(expression)),
-        }
-    }
-
-    Ok(ctx)
-}
-
-fn parse_input(input: &str) -> Result<(Vec<Token>, Vec<Token>), InputError> {
+fn parse_input(input: &str) -> Result<(Vec<Token>, Vec<Token>)> {
     let mut type_tokens = vec![];
     let mut expression_tokens = vec![];
     let mut remaining = input;
@@ -110,54 +151,26 @@ fn parse_input(input: &str) -> Result<(Vec<Token>, Vec<Token>), InputError> {
         remaining = parser::parse_ws(remaining);
 
         if remaining.is_empty() {
-            return Ok((type_tokens, expression_tokens))
+            return Ok((type_tokens, expression_tokens));
         }
 
         if let Some((token, rest)) = parser::parse_type(remaining) {
             type_tokens.push(token);
             remaining = rest;
-            continue
+            continue;
         }
 
         if let Some((token, rest)) = parser::parse_expression(remaining) {
             expression_tokens.push(token);
             remaining = rest;
-            continue
+            continue;
         }
 
-        return Err(InputError::Parse(ParseError(remaining.to_string())))
+        return Err(InputError::Parse(ParseError(remaining.to_string())));
     }
 }
 
-fn main() -> Result<(), InputError> {
-    let input = vec![
-        Expression::Type(ident("i"), types::example_int()),
-        Expression::Assignment(ident("i"), Box::new(ast::example_int())),
-        Expression::Type(ident("func"), types::example_func()),
-        Expression::Type(ident("value"), types::example_bool()),
-        Expression::Assignment(
-            ident("value"),
-            Box::new(Expression::Application(
-                ident("func"),
-                vec![Expression::Variable(ident("i"))],
-            )),
-        ),
-        Expression::Type(ident("block"), types::example_int()),
-        Expression::Assignment(
-            ident("block"),
-            Box::new(Expression::Block(
-                vec![
-                    Expression::Type(ident("a"), types::example_int()),
-                    Expression::Assignment(ident("a"), Box::new(ast::example_int())),
-                ],
-                Box::new(Expression::Variable(ident("a"))),
-            )),
-        ),
-    ];
-
-    let ctx = walk_input(input)?;
-    println!("{}", ctx);
-
+fn main() -> Result<()> {
     for expression_input in &[
         "5",
         "hello_world",
@@ -169,7 +182,7 @@ fn main() -> Result<(), InputError> {
         "{'foo'; a}",
         "{a; 'foo'; 1}",
         "foo.bar",
-        "foo.'baz'"
+        "foo.'baz'",
     ] {
         println!("Expression Input: {}", expression_input);
         match parser::parse_expression(expression_input) {
@@ -177,35 +190,48 @@ fn main() -> Result<(), InputError> {
                 println!("Token:            {:?}", token);
                 println!("Rest:             '{}'", rest);
             }
-            None => println!("Error")
+            None => println!("Error"),
         };
         println!();
     }
 
-    for expression_input in &[
+    for type_input in &[
         "{a: B}",
         "Foo",
         "type Foo = Bar",
         "type Foo = {a :B, cd: De}",
         "a :: Int",
         "foo :: (Int, Bool) -> Int",
-        "bar :: R : Row :: (Int) -> Table<R>"
+        "bar :: R : Row :: (Int) -> Table<R>",
     ] {
-        println!("Type Input: {}", expression_input);
-        match parser::parse_type(expression_input) {
+        println!("Type Input: {}", type_input);
+        match parser::parse_type(type_input) {
             Some((token, rest)) => {
                 println!("Token:      {:?}", token);
                 println!("Rest:       '{}'", rest);
             }
-            None => println!("Error")
+            None => println!("Error"),
         };
         println!();
     }
 
-    dbg!(parse_input("
-    a :: Int
-    a = 5
-"));
+    let input = "
+        a :: Int
+        a = 5
+    ";
+
+    let (type_tokens, expression_tokens) = parse_input(input)?;
+    let mut runtime = Runtime::new();
+
+    for type_token in type_tokens {
+        runtime.add_type_token(type_token)?;
+    }
+
+    for expression_token in expression_tokens {
+        runtime.add_expression_token(expression_token)?;
+    }
+
+    println!("{}", runtime);
 
     Ok(())
 }

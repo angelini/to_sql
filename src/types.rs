@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
-use crate::base::{ident, Identifier};
+use crate::base;
+use crate::base::{ColumnName, Identifier, TypeName};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Base {
@@ -73,6 +74,12 @@ pub enum Row {
     Unknown(usize),
 }
 
+impl Row {
+    pub fn from_value_types(types: BTreeMap<ColumnName, Type>) -> Row {
+        unimplemented!()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Type {
     Value(Primitive),
@@ -103,7 +110,8 @@ impl Type {
 
 #[derive(Debug)]
 pub enum TypeError {
-    Missing(Identifier),
+    MissingAlias(TypeName),
+    MissingAssignment(Identifier),
     NotAFunction(Identifier),
     NotAsExpected(Type, Type),
 }
@@ -111,7 +119,8 @@ pub enum TypeError {
 impl fmt::Display for TypeError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            TypeError::Missing(ident) => write!(f, "missing type for: '{:?}'", ident),
+            TypeError::MissingAlias(name) => write!(f, "missing type alias for: {}", name),
+            TypeError::MissingAssignment(ident) => write!(f, "missing type assignment for: {}", ident),
             TypeError::NotAFunction(ident) => write!(f, "not a function: '{:?}'", ident),
             TypeError::NotAsExpected(expected, actual) => {
                 write!(f, "expected: '{:?}', actual: '{:?}'", expected, actual)
@@ -154,42 +163,65 @@ fn unknown_table(id: usize) -> Type {
 
 #[derive(Clone, Debug)]
 pub struct TypeContext {
-    types: HashMap<Identifier, Type>,
+    aliases: HashMap<TypeName, Type>,
+    assignments: HashMap<Identifier, Type>,
 }
 
 impl TypeContext {
     pub fn new() -> TypeContext {
         TypeContext {
-            types: HashMap::new(),
+            aliases: HashMap::new(),
+            assignments: HashMap::new(),
         }
     }
 
+    pub fn alias(&mut self, name: TypeName, typ: Type) {
+        self.aliases.insert(name, typ);
+    }
+
+    pub fn lookup_alias(&self, name: &TypeName) -> Result<&Type, TypeError> {
+        self.aliases
+            .get(name)
+            .ok_or_else(|| TypeError::MissingAlias(name.clone()))
+    }
+
     pub fn add(&mut self, id: Identifier, typ: Type) {
-        self.types.insert(id, typ);
+        self.assignments.insert(id, typ);
     }
 
     pub fn get(&self, id: &Identifier) -> Result<&Type, TypeError> {
-        self.types
+        self.assignments
             .get(id)
-            .ok_or_else(|| TypeError::Missing(id.clone()))
+            .ok_or_else(|| TypeError::MissingAssignment(id.clone()))
     }
 }
 
 impl fmt::Display for TypeContext {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "Type Context:")?;
-        for (id, typ) in &self.types {
+        for (name, typ) in &self.aliases {
+            writeln!(f, "  {}: {:?}", name, typ)?;
+        }
+        for (id, typ) in &self.assignments {
             writeln!(f, "  {}: {:?}", id, typ)?;
         }
         write!(f, "")
     }
 }
 
+fn std_base_types(ctx: &mut TypeContext) {
+    ctx.alias(base::type_name("Bool"), value(Base::Bool(false)));
+    ctx.alias(base::type_name("Int"), value(Base::Int(false)));
+    ctx.alias(base::type_name("Float"), value(Base::Float(false)));
+    ctx.alias(base::type_name("String"), value(Base::String(false)));
+    ctx.alias(base::type_name("Date"), value(Base::Date(false)));
+}
+
 fn std_column_functions(ctx: &mut TypeContext) {
     // col :: P : Primitive :: P -> Col<P>
     {
         ctx.add(
-            ident("col"),
+            base::ident("col"),
             func(
                 vec![Kind::Primitive],
                 vec![unknown_value(0, false)],
@@ -207,7 +239,7 @@ fn std_column_functions(ctx: &mut TypeContext) {
     // default :: P : Primitive :: Col<P?>, P -> Col<P>
     {
         ctx.add(
-            ident("default"),
+            base::ident("default"),
             func(
                 vec![Kind::Primitive],
                 vec![unknown_col(0, true), unknown_value(0, false)],
@@ -221,7 +253,7 @@ fn std_table_functions(ctx: &mut TypeContext) {
     // select :: R1, R2 : Row :: Table<R1>, (R1 -> R2) -> Table<R2>
     {
         ctx.add(
-            ident("select"),
+            base::ident("select"),
             func(
                 vec![Kind::Row, Kind::Row],
                 vec![
@@ -240,7 +272,7 @@ fn std_table_functions(ctx: &mut TypeContext) {
     // filter :: R : Row :: Table<R>, (R -> Col<Bool>) -> Table<R>
     {
         ctx.add(
-            ident("filter"),
+            base::ident("filter"),
             func(
                 vec![Kind::Row],
                 vec![
@@ -259,23 +291,8 @@ fn std_table_functions(ctx: &mut TypeContext) {
 
 pub fn std() -> TypeContext {
     let mut ctx = TypeContext::new();
+    std_base_types(&mut ctx);
     std_column_functions(&mut ctx);
     std_table_functions(&mut ctx);
     ctx
-}
-
-pub fn example_int() -> Type {
-    value(Base::Int(false))
-}
-
-pub fn example_bool() -> Type {
-    value(Base::Bool(true))
-}
-
-pub fn example_func() -> Type {
-    func(
-        vec![],
-        vec![value(Base::Int(false))],
-        value(Base::Bool(true)),
-    )
 }

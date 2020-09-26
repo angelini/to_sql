@@ -33,8 +33,7 @@ pub enum Expression {
     Assignment(Identifier, Box<Expression>),
     Application(Identifier, Vec<Expression>),
     Block(Vec<Expression>, Box<Expression>),
-    Function(Vec<Identifier>, Box<Expression>),
-    Type(Identifier, Type),
+    Function(Vec<Identifier>, Box<Expression>)
 }
 
 impl Expression {
@@ -58,10 +57,10 @@ impl Expression {
                 }
             }
             Expression::Block(assignments, last_expression) => {
-                let mut nested_ctx = ctx.clone();
+                let nested_ctx = ctx.clone();
                 for assignment in assignments {
                     match assignment {
-                        Expression::Type(ident, typ) => nested_ctx.add(ident.clone(), typ.clone()),
+                        // Expression::Type(ident, typ) => nested_ctx.add(ident.clone(), typ.clone()),
                         Expression::Assignment(ident, expression) => {
                             expression.check_type(&nested_ctx, nested_ctx.get(ident)?)?
                         }
@@ -77,7 +76,6 @@ impl Expression {
                 }
                 expression.check_type(&nested_ctx, expected)
             }
-            _ => unimplemented!(),
         }
     }
 
@@ -88,12 +86,4 @@ impl Expression {
             Err(TypeError::NotAsExpected(expected.clone(), actual.clone()))
         }
     }
-}
-
-pub fn example_int() -> Expression {
-    Expression::Constant(Constant::Int(5))
-}
-
-pub fn example_bool() -> Expression {
-    Expression::Constant(Constant::Bool(true))
 }
