@@ -110,6 +110,8 @@ impl Type {
 
 #[derive(Debug)]
 pub enum TypeError {
+    DidNotExpectFunction(Type),
+    MistmatchArgumentCount(usize, usize),
     MissingAlias(TypeName),
     MissingAssignment(Identifier),
     NotAFunction(Identifier),
@@ -119,11 +121,23 @@ pub enum TypeError {
 impl fmt::Display for TypeError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            TypeError::DidNotExpectFunction(expected) => {
+                write!(f, "expected {:?}, not a function", expected)
+            }
+            TypeError::MistmatchArgumentCount(expected, actual) => write!(
+                f,
+                "expected {} function arguments, has {}",
+                expected, actual
+            ),
             TypeError::MissingAlias(name) => write!(f, "missing type alias for: {}", name),
-            TypeError::MissingAssignment(ident) => write!(f, "missing type assignment for: {}", ident),
-            TypeError::NotAFunction(ident) => write!(f, "not a function: '{:?}'", ident),
+            TypeError::MissingAssignment(ident) => {
+                write!(f, "missing type assignment for: {}", ident)
+            }
+            TypeError::NotAFunction(ident) => {
+                write!(f, "cannot call {}, it is not a function", ident)
+            }
             TypeError::NotAsExpected(expected, actual) => {
-                write!(f, "expected: '{:?}', actual: '{:?}'", expected, actual)
+                write!(f, "expected: {:?}, actual: {:?}", expected, actual)
             }
         }
     }

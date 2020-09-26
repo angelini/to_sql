@@ -33,7 +33,7 @@ pub enum Expression {
     Assignment(Identifier, Box<Expression>),
     Application(Identifier, Vec<Expression>),
     Block(Vec<Expression>, Box<Expression>),
-    Function(Vec<Identifier>, Box<Expression>)
+    Function(Vec<Identifier>, Box<Expression>),
 }
 
 impl Expression {
@@ -60,7 +60,6 @@ impl Expression {
                 let nested_ctx = ctx.clone();
                 for assignment in assignments {
                     match assignment {
-                        // Expression::Type(ident, typ) => nested_ctx.add(ident.clone(), typ.clone()),
                         Expression::Assignment(ident, expression) => {
                             expression.check_type(&nested_ctx, nested_ctx.get(ident)?)?
                         }
@@ -69,12 +68,24 @@ impl Expression {
                 }
                 last_expression.check_type(&nested_ctx, expected)
             }
-            Expression::Function(arguments, expression) => {
+            Expression::Function(argument_idents, expression) => {
                 let mut nested_ctx = ctx.clone();
-                for argument in arguments {
-                    nested_ctx.add(argument.clone(), ctx.get(argument)?.clone())
+                let (argument_types, body_type) = match expected {
+                    Type::Function(_, args, body) => (args, body),
+                    _ => return Err(TypeError::DidNotExpectFunction(expected.clone())),
+                };
+
+                if argument_types.len() != argument_idents.len() {
+                    return Err(TypeError::MistmatchArgumentCount(
+                        argument_types.len(),
+                        argument_idents.len(),
+                    ));
                 }
-                expression.check_type(&nested_ctx, expected)
+
+                for (idx, arg_ident) in argument_idents.iter().enumerate() {
+                    nested_ctx.add(arg_ident.clone(), argument_types[idx].clone())
+                }
+                expression.check_type(&nested_ctx, body_type)
             }
         }
     }

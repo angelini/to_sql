@@ -69,6 +69,10 @@ impl Runtime {
             Token::TypeAssignment(ident, type_token) => {
                 self.types.add(ident, self.as_type(*type_token)?)
             }
+
+            Token::TypeAlias(new_name, type_token) => {
+                self.types.alias(new_name, self.as_type(*type_token)?)
+            }
             _ => return Err(InputError::InvalidRoot(token)),
         };
         Ok(())
@@ -78,6 +82,7 @@ impl Runtime {
         match token {
             Token::Assignment(ident, expression_token) => {
                 let expression = self.as_expression(*expression_token)?;
+                println!("checking type for: {}, expected: {:?}", ident, self.types.get(&ident));
                 expression.check_type(&self.types, self.types.get(&ident)?)?;
                 self.impls.insert(ident, expression)
             }
@@ -89,14 +94,21 @@ impl Runtime {
     fn as_type(&self, token: Token) -> Result<Type> {
         Ok(match token {
             Token::TypeName(name) => self.types.lookup_alias(&name)?.clone(),
-            Token::RowType(r) => {
-                let row_types = r
+            Token::RowType(row_tokens) => {
+                let row_types = row_tokens
                     .into_iter()
                     .map(|(col_name, type_name)| {
                         Ok((col_name, self.types.lookup_alias(&type_name)?.clone()))
                     })
                     .collect::<Result<BTreeMap<ColumnName, Type>>>()?;
                 Type::Row(Row::from_value_types(row_types))
+            }
+            Token::FunctionType(argument_tokens, body_token) => {
+                let argument_types = argument_tokens
+                    .into_iter()
+                    .map(|arg| Ok(self.as_type(arg)?))
+                    .collect::<Result<Vec<Type>>>()?;
+                Type::Function(vec![], argument_types, Box::new(self.as_type(*body_token)?))
             }
             _ => unimplemented!(),
         })
@@ -218,6 +230,12 @@ fn main() -> Result<()> {
     let input = "
         a :: Int
         a = 5
+
+        foo :: (Int) -> Bool
+        foo = (test) -> true
+
+        result :: Bool
+        result = foo(1)
     ";
 
     let (type_tokens, expression_tokens) = parse_input(input)?;
