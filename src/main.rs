@@ -9,11 +9,16 @@ use std::fmt;
 
 use ast::Expression;
 use base::{ident, Identifier};
+use parser::Token;
 use types::{Type, TypeContext, TypeError};
+
+#[derive(Debug)]
+struct ParseError(String);
 
 #[derive(Debug)]
 enum InputError {
     InvalidRoot(Expression),
+    Parse(ParseError),
     Type(TypeError),
 }
 
@@ -23,8 +28,15 @@ impl fmt::Display for InputError {
             InputError::InvalidRoot(expression) => {
                 write!(f, "invalid root expression: {:?}", expression)
             }
+            InputError::Parse(parse_error) => write!(f, "error parsing: '''\n{}\n'''", parse_error.0),
             InputError::Type(type_error) => write!(f, "type error: {}", type_error),
         }
+    }
+}
+
+impl From<ParseError> for InputError {
+    fn from(error: ParseError) -> Self {
+        InputError::Parse(error)
     }
 }
 
@@ -89,6 +101,34 @@ fn walk_input(input: Vec<Expression>) -> Result<Context, InputError> {
     Ok(ctx)
 }
 
+fn parse_input(input: &str) -> Result<(Vec<Token>, Vec<Token>), InputError> {
+    let mut type_tokens = vec![];
+    let mut expression_tokens = vec![];
+    let mut remaining = input;
+
+    loop {
+        remaining = parser::parse_ws(remaining);
+
+        if remaining.is_empty() {
+            return Ok((type_tokens, expression_tokens))
+        }
+
+        if let Some((token, rest)) = parser::parse_type(remaining) {
+            type_tokens.push(token);
+            remaining = rest;
+            continue
+        }
+
+        if let Some((token, rest)) = parser::parse_expression(remaining) {
+            expression_tokens.push(token);
+            remaining = rest;
+            continue
+        }
+
+        return Err(InputError::Parse(ParseError(remaining.to_string())))
+    }
+}
+
 fn main() -> Result<(), InputError> {
     let input = vec![
         Expression::Type(ident("i"), types::example_int()),
@@ -127,7 +167,9 @@ fn main() -> Result<(), InputError> {
         "(foo, bar) -> 1",
         "{a}",
         "{'foo'; a}",
-        "{a; 'foo'; 1}"
+        "{a; 'foo'; 1}",
+        "foo.bar",
+        "foo.'baz'"
     ] {
         println!("Expression Input: {}", expression_input);
         match parser::parse_expression(expression_input) {
@@ -137,7 +179,7 @@ fn main() -> Result<(), InputError> {
             }
             None => println!("Error")
         };
-        println!("");
+        println!();
     }
 
     for expression_input in &[
@@ -145,8 +187,9 @@ fn main() -> Result<(), InputError> {
         "Foo",
         "type Foo = Bar",
         "type Foo = {a :B, cd: De}",
-        "foo :: Int, Bool -> Int",
-        "bar :: R : Row :: Int -> Table<R>"
+        "a :: Int",
+        "foo :: (Int, Bool) -> Int",
+        "bar :: R : Row :: (Int) -> Table<R>"
     ] {
         println!("Type Input: {}", expression_input);
         match parser::parse_type(expression_input) {
@@ -156,8 +199,13 @@ fn main() -> Result<(), InputError> {
             }
             None => println!("Error")
         };
-        println!("");
+        println!();
     }
+
+    dbg!(parse_input("
+    a :: Int
+    a = 5
+"));
 
     Ok(())
 }

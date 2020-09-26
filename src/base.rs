@@ -26,7 +26,7 @@ impl Identifier {
         Identifier(value)
     }
 
-    pub fn as_column_name(self) -> ColumnName {
+    pub fn into_column_name(self) -> ColumnName {
         ColumnName(self.0)
     }
 }
