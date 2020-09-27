@@ -29,7 +29,6 @@ impl Base {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Kind {
     Primitive,
-    Column,
     Row,
 }
 

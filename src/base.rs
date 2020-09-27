@@ -53,6 +53,10 @@ impl TypeName {
     pub fn new(value: String) -> Self {
         TypeName(value)
     }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 impl fmt::Display for TypeName {

@@ -28,11 +28,12 @@ pub enum Token {
     Function(Vec<Identifier>, Box<Token>),
 
     TypeName(TypeName),
+    GenericTypeName(Vec<TypeName>),
     RowType(RowType),
     TypeAlias(TypeName, Box<Token>),
     FunctionType(Vec<Token>, Box<Token>),
     TypeAssignment(Identifier, Box<Token>),
-    GenericTypeAssignment(Identifier, Vec<Kind>, Box<Token>)
+    GenericTypeAssignment(Identifier, Vec<Kind>, Box<Token>),
 }
 
 type Tokens = Option<Vec<Token>>;
@@ -417,7 +418,7 @@ impl Parser for RowValueParser {
                 }
                 (Some(vec![Token::RowValue(row_value)]), rest)
             }
-            None => fail(input)
+            None => fail(input),
         }
     }
 }
@@ -591,12 +592,43 @@ struct TypeNameParser;
 impl Parser for TypeNameParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
         lazy_static! {
-            static ref RE: Regex = Regex::new(r"^[A-Z][a-zA-Z0-9]*(<[A-Z][a-zA-Z0-9]*>)?").unwrap();
+            static ref RE: Regex = Regex::new(r"^[A-Z][a-zA-Z0-9]*").unwrap();
         }
         match RE.find(input) {
             Some(m) => {
                 let type_name = TypeName::new(input[0..m.end()].to_string());
                 (Some(vec![Token::TypeName(type_name)]), &input[m.end()..])
+            }
+            None => fail(input),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct GenericTypeNameParser;
+
+impl Parser for GenericTypeNameParser {
+    fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
+        let (tokens, rest) = chain!(
+            TypeNameParser,
+            fixed("<"),
+            choose!(GenericTypeNameParser, TypeNameParser),
+            fixed(">")
+        )
+        .take(input);
+
+        match tokens {
+            Some(ts) => {
+                let type_names = ts
+                    .into_iter()
+                    .map(|token| match token {
+                        Token::TypeName(name) => vec![name],
+                        Token::GenericTypeName(names) => names,
+                        _ => unreachable!()
+                    })
+                    .flatten()
+                    .collect();
+                (Some(vec![Token::GenericTypeName(type_names)]), rest)
             }
             None => fail(input),
         }
@@ -708,7 +740,6 @@ impl Parser for FunctionTypeParser {
     }
 }
 
-
 #[derive(Clone, Debug)]
 struct TypeAssignmentParser;
 
@@ -763,12 +794,18 @@ impl Parser for GenericTypeAssignmentParser {
                     _ => unreachable!(),
                 };
 
-                let kinds = ts.into_iter().map(|token| match token {
-                    Token::Kind(kind) => kind,
-                    _ => unreachable!()
-                }).collect();
+                let kinds = ts
+                    .into_iter()
+                    .map(|token| match token {
+                        Token::Kind(kind) => kind,
+                        _ => unreachable!(),
+                    })
+                    .collect();
 
-                (Some(vec![Token::GenericTypeAssignment(ident, kinds, typ)]), rest)
+                (
+                    Some(vec![Token::GenericTypeAssignment(ident, kinds, typ)]),
+                    rest,
+                )
             }
             None => fail(input),
         }
@@ -782,6 +819,7 @@ impl Parser for TypeParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
         choose!(
             RowTypeParser,
+            GenericTypeNameParser,
             TypeAliasParser,
             FunctionTypeParser,
             GenericTypeAssignmentParser,

@@ -10,7 +10,7 @@ use std::fmt;
 use ast::Expression;
 use base::{ColumnName, Identifier};
 use parser::Token;
-use types::{Row, Type, TypeContext, TypeError};
+use types::{Column, Primitive, Row, Type, TypeContext, TypeError};
 
 #[derive(Debug)]
 struct ParseError(String);
@@ -98,6 +98,21 @@ impl Runtime {
     fn as_type(&self, token: Token) -> Result<Type> {
         Ok(match token {
             Token::TypeName(name) => self.types.lookup_alias(&name)?.clone(),
+            Token::GenericTypeName(mut names) => {
+                let root = names.remove(0);
+                let nested = if names.len() > 1 {
+                    Token::GenericTypeName(names)
+                } else {
+                    Token::TypeName(names.pop().unwrap())
+                };
+
+                match (root.as_str(), self.as_type(nested)?) {
+                    ("Col", Type::Value(Primitive::Known(base))) => {
+                        Type::Column(Column::Known(base))
+                    }
+                    _ => unimplemented!(),
+                }
+            }
             Token::RowType(row_tokens) => {
                 let row_types = row_tokens
                     .into_iter()
@@ -224,6 +239,8 @@ fn main() -> Result<()> {
     for type_input in &[
         "{a: B}",
         "Foo",
+        "Col<Int>",
+        "List<Col<Bool>>",
         "type Foo = Bar",
         "type Foo = {a :B, cd: De}",
         "a :: Int",
