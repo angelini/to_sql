@@ -82,7 +82,11 @@ impl Runtime {
         match token {
             Token::Assignment(ident, expression_token) => {
                 let expression = self.as_expression(*expression_token)?;
-                println!("checking type for: {}, expected: {:?}", ident, self.types.get(&ident));
+                println!(
+                    "checking type for: {}, expected: {:?}",
+                    ident,
+                    self.types.get(&ident)
+                );
                 expression.check_type(&self.types, self.types.get(&ident)?)?;
                 self.impls.insert(ident, expression)
             }
@@ -118,6 +122,9 @@ impl Runtime {
         Ok(match token {
             Token::Constant(constant) => Expression::Constant(constant),
             Token::Identifier(ident) => Expression::Variable(ident),
+            Token::Assignment(ident, body) => {
+                Expression::Assignment(ident, Box::new(self.as_expression(*body)?))
+            }
             Token::Application(ident, arguments) => Expression::Application(
                 ident,
                 arguments
@@ -125,6 +132,13 @@ impl Runtime {
                     .map(|arg| Ok(self.as_expression(arg)?))
                     .collect::<Result<Vec<Expression>>>()?,
             ),
+            Token::RowValue(row_tokens) => {
+                let row_expressions = row_tokens
+                    .into_iter()
+                    .map(|(col_name, expr_token)| Ok((col_name, self.as_expression(expr_token)?)))
+                    .collect::<Result<BTreeMap<ColumnName, Expression>>>()?;
+                Expression::Row(row_expressions)
+            }
             Token::Block(mut expressions) => {
                 let last = self.as_expression(expressions.pop().unwrap())?;
                 Expression::Block(
@@ -236,6 +250,15 @@ fn main() -> Result<()> {
 
         result :: Bool
         result = foo(1)
+
+        type A = Int
+        type Bc = Bool
+
+        colInt :: (Int) -> Col<Int>
+        colBool :: (Bool) -> Col<Bool>
+
+        row :: { a: A, 'b c': Bc }
+        row = { a: colInt(1), 'b c': colBool(true) }
     ";
 
     let (type_tokens, expression_tokens) = parse_input(input)?;

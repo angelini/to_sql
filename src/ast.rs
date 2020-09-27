@@ -1,8 +1,10 @@
+use std::collections::BTreeMap;
+
 use chrono::naive::NaiveDate;
 use rust_decimal::Decimal;
 
-use crate::base::Identifier;
-use crate::types::{Base, Primitive, Type, TypeContext, TypeError};
+use crate::base::{ColumnName, Identifier};
+use crate::types::{Base, Column, Primitive, Row, Type, TypeContext, TypeError};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Constant {
@@ -26,10 +28,13 @@ impl Constant {
     }
 }
 
+pub type RowValue = BTreeMap<ColumnName, Expression>;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Expression {
     Constant(Constant),
     Variable(Identifier),
+    Row(RowValue),
     Assignment(Identifier, Box<Expression>),
     Application(Identifier, Vec<Expression>),
     Block(Vec<Expression>, Box<Expression>),
@@ -38,13 +43,50 @@ pub enum Expression {
 
 impl Expression {
     pub fn check_type(&self, ctx: &TypeContext, expected: &Type) -> Result<(), TypeError> {
-        match self {
-            Expression::Constant(constant) => Self::compare_types(expected, &constant.get_type()),
-            Expression::Variable(ident) => Self::compare_types(expected, ctx.get(ident)?),
-            Expression::Assignment(ident, expression) => {
-                expression.check_type(ctx, ctx.get(ident)?)
+        match (expected, self) {
+            (Type::Value(_), Expression::Constant(constant)) => {
+                Self::compare_types(expected, &constant.get_type())
             }
-            Expression::Application(ident, arg_expressions) => {
+            (Type::Row(Row::Known(row_type)), Expression::Row(row_value)) => {
+                if row_type.len() != row_value.len() {
+                    return Err(TypeError::MistmatchRow(
+                        row_type.clone(),
+                        format!("{:?}", row_value),
+                    ));
+                }
+
+                for ((exp_name, exp_type), (act_name, act_expr)) in
+                    row_type.iter().zip(row_value.into_iter())
+                {
+                    if exp_name != act_name {
+                        return Err(TypeError::MistmatchRow(
+                            row_type.clone(),
+                            format!("{:?}", row_value),
+                        ));
+                    }
+                    act_expr.check_type(ctx, &Type::Column(Column::Known(exp_type.clone())))?
+                }
+
+                Ok(())
+            }
+            (Type::Function(_, arg_types, body_type), Expression::Function(arg_idents, body)) => {
+                let mut nested_ctx = ctx.clone();
+
+                if arg_types.len() != arg_idents.len() {
+                    return Err(TypeError::MistmatchArgumentCount(
+                        arg_types.len(),
+                        arg_idents.len(),
+                    ));
+                }
+
+                for (idx, arg_ident) in arg_idents.iter().enumerate() {
+                    nested_ctx.add(arg_ident.clone(), arg_types[idx].clone())
+                }
+                body.check_type(&nested_ctx, body_type)
+            }
+
+            (_, Expression::Variable(ident)) => Self::compare_types(expected, ctx.get(ident)?),
+            (_, Expression::Application(ident, arg_expressions)) => {
                 if let Type::Function(_, expected_args, actual) = ctx.get(ident)? {
                     for (expression, expected_arg) in
                         arg_expressions.iter().zip(expected_args.iter())
@@ -56,7 +98,7 @@ impl Expression {
                     Err(TypeError::NotAFunction(ident.clone()))
                 }
             }
-            Expression::Block(assignments, last_expression) => {
+            (_, Expression::Block(assignments, last_expression)) => {
                 let nested_ctx = ctx.clone();
                 for assignment in assignments {
                     match assignment {
@@ -68,25 +110,10 @@ impl Expression {
                 }
                 last_expression.check_type(&nested_ctx, expected)
             }
-            Expression::Function(argument_idents, expression) => {
-                let mut nested_ctx = ctx.clone();
-                let (argument_types, body_type) = match expected {
-                    Type::Function(_, args, body) => (args, body),
-                    _ => return Err(TypeError::DidNotExpectFunction(expected.clone())),
-                };
-
-                if argument_types.len() != argument_idents.len() {
-                    return Err(TypeError::MistmatchArgumentCount(
-                        argument_types.len(),
-                        argument_idents.len(),
-                    ));
-                }
-
-                for (idx, arg_ident) in argument_idents.iter().enumerate() {
-                    nested_ctx.add(arg_ident.clone(), argument_types[idx].clone())
-                }
-                expression.check_type(&nested_ctx, body_type)
-            }
+            (_, _) => Err(TypeError::UnexpectedType(
+                expected.clone(),
+                format!("{:?}", self),
+            )),
         }
     }
 
@@ -94,7 +121,10 @@ impl Expression {
         if expected.captures(actual) {
             Ok(())
         } else {
-            Err(TypeError::NotAsExpected(expected.clone(), actual.clone()))
+            Err(TypeError::UnexpectedType(
+                expected.clone(),
+                format!("{:?}", actual),
+            ))
         }
     }
 }

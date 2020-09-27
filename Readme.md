@@ -2,7 +2,20 @@
 
 ## Example
 
-Given a `.tsql` and all required positional arguments, `build` will return valid SQL
+Given a `.tsql` file and all required positional arguments, `build` will return valid SQL
+
+```
+$ cat example.tsql
+
+type Result = { user: Int, score: Int }
+
+main :: (Ctx, Int, String) -> Table<Result>
+main = (ctx, minimum, profile) -> {
+    ctx.scores
+      |> filter(r -> r.profile == profile && r.id > minimum)
+      |> selectColumns(['user', 'score'])
+}
+```
 
 ```
 $ tosql build example.tsql 5 "dev"
@@ -12,9 +25,21 @@ FROM scores
 WHERE id > 5 AND profile = 'dev'
 ```
 
-## Types
+## Spec
 
-### Aliases
+### Comments
+
+Rest of the line: `value > 10  // example comment`
+
+Multi line:
+
+```
+/*
+longer comment
+*/
+```
+
+### Type Aliases
 
 Any type can be aliased to any capitalized name
 
@@ -51,7 +76,7 @@ Named type definition: `type Example = { id: Int, value: String }`
 
 Value: `{ id: row.id, value: capitalize(row.value) }`
 
-### Annotations
+### Type Annotations
 
 Named functions
 
@@ -71,7 +96,7 @@ Multiple occurences of the same type class:
 select :: R1, R2 : Row :: Table<R1>, (R1 -> R2) -> Table<R2>
 ```
 
-### Type classes
+### Type Classes
 
 - `P : Primitive :: Value<P?>`
 - `P : Primitive :: Col<P?>`
@@ -111,7 +136,7 @@ example((left, right) -> len(right))
 example(left, (right) -> len(right))
 ```
 
-## Column Names
+### Column Names
 
 Quotes are not necessary for column names:
 
@@ -130,6 +155,64 @@ other :: Other
 ```
 
 Row access: `other.'with space'`
+
+### Function Application
+
+Call function: `select(example, r -> { value: row.value })`
+
+Pipe operator:
+
+```
+// These chained applications:
+select(
+    filter(example, r -> row.id > 10),
+    r -> row.value
+)
+
+// Can be replaced by the following use of the pipe operator:
+example
+    |> filter(r -> row.id > 10)
+    |> select(r -> row.value)
+```
+
+### Case Statements
+
+```
+case table { r ->
+    r.value == 4: col(true),
+    _: col(false),
+}
+```
+
+### Context
+
+Object that contains all table definitions
+
+```
+ctx :: Ctx
+
+ctx.<table1 name> = <schema1>
+ctx.<table2 name> = <schema2>
+```
+
+Supports quoted and non-quoted table names:
+
+```
+ctx.example :: Example
+ctx.'other' :: Other
+```
+
+### Main Function
+
+```
+main :: R : Row :: Ctx, Arg, ... -> Table<R>
+```
+
+First arg must always be of type `Ctx`
+
+Return type must always be `R : Row :: Table<R>`
+
+All other args are passed in via the cli.
 
 ## Standard Library
 
@@ -182,66 +265,3 @@ Where `cmp` is any of: `==, !=, >=, <=, >, <`
 `op :: Col<Bool>, Col<Bool> -> Col<Bool>`
 
 Where `op` is any of: `&&, ||`
-
-## Application
-
-Call function: `select(example, r -> row.value)`
-
-Pipe operator:
-
-```
-example
-    |> filter(r -> row.id > 10)
-    |> select(r -> row.value)
-```
-
-## Case Statements
-
-```
-case table { r ->
-    r.value == 4: col(true),
-    _: col(false),
-}
-```
-
-## Comments
-
-Rest of the line: `value > 10  // example comment`
-
-Multi line:
-
-```
-/*
-longer comment
-*/
-```
-
-## Context
-
-Object that contains all table definitions
-
-```
-ctx :: Ctx
-
-ctx.<table1 name> = <schema1>
-ctx.<table2 name> = <schema2>
-```
-
-Supports quoted and non-quoted table names:
-
-```
-ctx.example :: Example
-ctx.'other' :: Other
-```
-
-## Main Function
-
-```
-main :: R : Row :: Ctx, Arg, ... -> Table<R>
-```
-
-First arg must always be of type `Ctx`
-
-Return type must always be `R : Row :: Table<R>`
-
-All other args are passed in via the cli.

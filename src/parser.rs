@@ -10,6 +10,7 @@ use rust_decimal::Decimal;
 use crate::ast::Constant;
 use crate::base::{ColumnName, Identifier, TypeName};
 
+pub type RowValue = BTreeMap<ColumnName, Token>;
 pub type RowType = BTreeMap<ColumnName, TypeName>;
 
 pub type Kind = (TypeName, TypeName);
@@ -19,6 +20,7 @@ pub enum Token {
     Constant(Constant),
     Identifier(Identifier),
     Kind(Kind),
+    RowValue(RowValue),
     Block(Vec<Token>),
     Access(Identifier, ColumnName),
     Assignment(Identifier, Box<Token>),
@@ -354,68 +356,6 @@ impl Parser for IdentifierParser {
 }
 
 #[derive(Clone, Debug)]
-struct TypeNameParser;
-
-impl Parser for TypeNameParser {
-    fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
-        lazy_static! {
-            static ref RE: Regex = Regex::new(r"^[A-Z][a-zA-Z0-9]*(<[A-Z][a-zA-Z0-9]*>)?").unwrap();
-        }
-        match RE.find(input) {
-            Some(m) => {
-                let type_name = TypeName::new(input[0..m.end()].to_string());
-                (Some(vec![Token::TypeName(type_name)]), &input[m.end()..])
-            }
-            None => fail(input),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct RowTypeParser;
-
-impl Parser for RowTypeParser {
-    fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
-        let (tokens, rest) = chain!(
-            fixed("{"),
-            repeat!(
-                chain!(
-                    choose!(IdentifierParser, StringParser),
-                    optional(WsParser),
-                    fixed(":"),
-                    optional(WsParser),
-                    TypeNameParser
-                ),
-                fixed(",")
-            ),
-            fixed("}")
-        )
-        .take(input);
-
-        let mut row_type = BTreeMap::new();
-
-        match tokens {
-            Some(ts) => {
-                for mut chunk in ts.into_iter().chunks(2).into_iter() {
-                    let column_name = match chunk.next().unwrap() {
-                        Token::Constant(Constant::String(s)) => ColumnName::new(s),
-                        Token::Identifier(ident) => ident.into_column_name(),
-                        _ => unreachable!(),
-                    };
-                    let type_name = match chunk.next() {
-                        Some(Token::TypeName(t)) => t,
-                        _ => unreachable!(),
-                    };
-                    row_type.insert(column_name, type_name);
-                }
-                (Some(vec![Token::RowType(row_type)]), rest)
-            }
-            None => fail(input),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
 struct KindParser;
 
 impl Parser for KindParser {
@@ -437,6 +377,67 @@ impl Parser for KindParser {
                 };
                 (Some(vec![kind]), rest)
             }
+            None => fail(input),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RowValueParser;
+
+impl Parser for RowValueParser {
+    fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
+        let (tokens, rest) = chain!(
+            fixed("{"),
+            repeat!(
+                chain!(
+                    choose!(IdentifierParser, StringParser),
+                    optional(WsParser),
+                    fixed(":"),
+                    optional(WsParser),
+                    ExpressionParser
+                ),
+                fixed(",")
+            ),
+            fixed("}")
+        )
+        .take(input);
+
+        let mut row_value = BTreeMap::new();
+
+        match tokens {
+            Some(ts) => {
+                for mut chunk in ts.into_iter().chunks(2).into_iter() {
+                    let column_name = match chunk.next().unwrap() {
+                        Token::Constant(Constant::String(s)) => ColumnName::new(s),
+                        Token::Identifier(ident) => ident.into_column_name(),
+                        _ => unreachable!(),
+                    };
+                    row_value.insert(column_name, chunk.next().unwrap());
+                }
+                (Some(vec![Token::RowValue(row_value)]), rest)
+            }
+            None => fail(input)
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct BlockParser;
+
+impl Parser for BlockParser {
+    fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
+        let (tokens, rest) = chain!(
+            fixed("{"),
+            optional(WsParser),
+            repeat!(ExpressionParser, fixed(";")),
+            optional(WsParser),
+            fixed("}")
+        )
+        .take(input);
+
+        match tokens {
+            Some(ts) => (Some(vec![Token::Block(ts)]), rest),
             None => fail(input),
         }
     }
@@ -531,27 +532,6 @@ impl Parser for ApplicationParser {
 }
 
 #[derive(Clone, Debug)]
-struct BlockParser;
-
-impl Parser for BlockParser {
-    fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
-        let (tokens, rest) = chain!(
-            fixed("{"),
-            optional(WsParser),
-            repeat!(ExpressionParser, fixed(";")),
-            optional(WsParser),
-            fixed("}")
-        )
-        .take(input);
-
-        match tokens {
-            Some(ts) => (Some(vec![Token::Block(ts)]), rest),
-            None => fail(input),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
 struct FunctionParser;
 
 impl Parser for FunctionParser {
@@ -592,6 +572,7 @@ struct ExpressionParser;
 impl Parser for ExpressionParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
         choose!(
+            RowValueParser,
             BlockParser,
             AssignmentParser,
             ApplicationParser,
@@ -601,6 +582,68 @@ impl Parser for ExpressionParser {
             IdentifierParser
         )
         .take(input)
+    }
+}
+
+#[derive(Clone, Debug)]
+struct TypeNameParser;
+
+impl Parser for TypeNameParser {
+    fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
+        lazy_static! {
+            static ref RE: Regex = Regex::new(r"^[A-Z][a-zA-Z0-9]*(<[A-Z][a-zA-Z0-9]*>)?").unwrap();
+        }
+        match RE.find(input) {
+            Some(m) => {
+                let type_name = TypeName::new(input[0..m.end()].to_string());
+                (Some(vec![Token::TypeName(type_name)]), &input[m.end()..])
+            }
+            None => fail(input),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RowTypeParser;
+
+impl Parser for RowTypeParser {
+    fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
+        let (tokens, rest) = chain!(
+            fixed("{"),
+            repeat!(
+                chain!(
+                    choose!(IdentifierParser, StringParser),
+                    optional(WsParser),
+                    fixed(":"),
+                    optional(WsParser),
+                    TypeNameParser
+                ),
+                fixed(",")
+            ),
+            fixed("}")
+        )
+        .take(input);
+
+        let mut row_type = BTreeMap::new();
+
+        match tokens {
+            Some(ts) => {
+                for mut chunk in ts.into_iter().chunks(2).into_iter() {
+                    let column_name = match chunk.next().unwrap() {
+                        Token::Constant(Constant::String(s)) => ColumnName::new(s),
+                        Token::Identifier(ident) => ident.into_column_name(),
+                        _ => unreachable!(),
+                    };
+                    let type_name = match chunk.next() {
+                        Some(Token::TypeName(t)) => t,
+                        _ => unreachable!(),
+                    };
+                    row_type.insert(column_name, type_name);
+                }
+                (Some(vec![Token::RowType(row_type)]), rest)
+            }
+            None => fail(input),
+        }
     }
 }
 

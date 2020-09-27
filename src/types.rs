@@ -46,11 +46,15 @@ pub enum Column {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RowSchema(BTreeMap<String, Base>);
+pub struct RowSchema(BTreeMap<ColumnName, Base>);
 
 impl RowSchema {
-    fn from_vec<S: Into<String>>(columns: Vec<(S, Base)>) -> RowSchema {
-        RowSchema(columns.into_iter().map(|(k, v)| (k.into(), v)).collect())
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn iter(&self) -> std::collections::btree_map::Iter<ColumnName, Base> {
+        self.0.iter()
     }
 
     fn captures(&self, other: &Self) -> bool {
@@ -75,8 +79,19 @@ pub enum Row {
 }
 
 impl Row {
-    pub fn from_value_types(types: BTreeMap<ColumnName, Type>) -> Row {
-        unimplemented!()
+    pub fn from_value_types(types: BTreeMap<ColumnName, Type>) -> Self {
+        Row::Known(RowSchema(
+            types
+                .into_iter()
+                .map(|(name, typ)| {
+                    let base = match typ {
+                        Type::Value(Primitive::Known(base)) => base,
+                        _ => unimplemented!(),
+                    };
+                    (name, base)
+                })
+                .collect(),
+        ))
     }
 }
 
@@ -94,6 +109,8 @@ pub enum Type {
 
 impl Type {
     pub fn captures(&self, actual: &Self) -> bool {
+        dbg!(&self);
+        dbg!(&actual);
         match (self, actual) {
             (Type::Value(Primitive::Known(expected)), Type::Value(Primitive::Known(actual)))
             | (Type::Column(Column::Known(expected)), Type::Column(Column::Known(actual))) => {
@@ -110,25 +127,23 @@ impl Type {
 
 #[derive(Debug)]
 pub enum TypeError {
-    DidNotExpectFunction(Type),
     MistmatchArgumentCount(usize, usize),
+    MistmatchRow(RowSchema, String),
     MissingAlias(TypeName),
     MissingAssignment(Identifier),
     NotAFunction(Identifier),
-    NotAsExpected(Type, Type),
+    UnexpectedType(Type, String),
 }
 
 impl fmt::Display for TypeError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            TypeError::DidNotExpectFunction(expected) => {
-                write!(f, "expected {:?}, not a function", expected)
-            }
             TypeError::MistmatchArgumentCount(expected, actual) => write!(
                 f,
                 "expected {} function arguments, has {}",
                 expected, actual
             ),
+            TypeError::MistmatchRow(expected, actual) => write!(f, ""),
             TypeError::MissingAlias(name) => write!(f, "missing type alias for: {}", name),
             TypeError::MissingAssignment(ident) => {
                 write!(f, "missing type assignment for: {}", ident)
@@ -136,8 +151,8 @@ impl fmt::Display for TypeError {
             TypeError::NotAFunction(ident) => {
                 write!(f, "cannot call {}, it is not a function", ident)
             }
-            TypeError::NotAsExpected(expected, actual) => {
-                write!(f, "expected: {:?}, actual: {:?}", expected, actual)
+            TypeError::UnexpectedType(expected, actual) => {
+                write!(f, "expected: {:?}, actual: {}", expected, actual)
             }
         }
     }
@@ -157,10 +172,6 @@ fn col(base: Base) -> Type {
 
 fn unknown_col(id: usize, nullable: bool) -> Type {
     Type::Column(Column::Unknown(id, nullable))
-}
-
-fn row<S: Into<String>>(columns: Vec<(S, Base)>) -> Type {
-    Type::Row(Row::Known(RowSchema::from_vec(columns)))
 }
 
 fn unknown_row(id: usize) -> Type {
