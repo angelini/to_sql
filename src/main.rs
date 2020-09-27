@@ -227,6 +227,7 @@ fn main() -> Result<()> {
         "{a; 'foo'; 1}",
         "foo.bar",
         "foo.'baz'",
+        "4.5"
     ] {
         println!("Expression Input: {}", expression_input);
         match parser::parse_expression(expression_input) {

@@ -345,7 +345,7 @@ struct IdentifierParser;
 impl Parser for IdentifierParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
         lazy_static! {
-            static ref RE: Regex = Regex::new(r"^[a-zA-Z0-9_\-]+").unwrap();
+            static ref RE: Regex = Regex::new(r"^[a-z][a-zA-Z0-9_\-]*").unwrap();
         }
         match RE.find(input) {
             Some(m) => {
