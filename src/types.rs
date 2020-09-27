@@ -108,8 +108,6 @@ pub enum Type {
 
 impl Type {
     pub fn captures(&self, actual: &Self) -> bool {
-        dbg!(&self);
-        dbg!(&actual);
         match (self, actual) {
             (Type::Value(Primitive::Known(expected)), Type::Value(Primitive::Known(actual)))
             | (Type::Column(Column::Known(expected)), Type::Column(Column::Known(actual))) => {
@@ -118,6 +116,14 @@ impl Type {
             (Type::Row(Row::Known(expected)), Type::Row(Row::Known(actual)))
             | (Type::Table(Row::Known(expected)), Type::Table(Row::Known(actual))) => {
                 expected.captures(actual)
+            }
+            (Type::Union(variants), _) => {
+                for variant in variants {
+                    if variant.captures(actual) {
+                        return true
+                    }
+                }
+                return false
             }
             _ => unimplemented!(),
         }
@@ -142,7 +148,7 @@ impl fmt::Display for TypeError {
                 "expected {} function arguments, has {}",
                 expected, actual
             ),
-            TypeError::MistmatchRow(expected, actual) => write!(f, ""),
+            TypeError::MistmatchRow(expected, actual) => write!(f, "expected: {:?}, actual: {}", expected, actual),
             TypeError::MissingAlias(name) => write!(f, "missing type alias for: {}", name),
             TypeError::MissingAssignment(ident) => {
                 write!(f, "missing type assignment for: {}", ident)

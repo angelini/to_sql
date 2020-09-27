@@ -29,6 +29,7 @@ pub enum Token {
 
     TypeName(TypeName),
     GenericTypeName(Vec<TypeName>),
+    Union(Vec<Token>),
     RowType(RowType),
     TypeAlias(TypeName, Box<Token>),
     FunctionType(Vec<Token>, Box<Token>),
@@ -636,6 +637,28 @@ impl Parser for GenericTypeNameParser {
 }
 
 #[derive(Clone, Debug)]
+struct UnionParser;
+
+impl Parser for UnionParser {
+    fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
+        let (tokens, rest) = chain!(
+            choose!(GenericTypeNameParser, TypeNameParser),
+            optional(WsParser),
+            fixed("|"),
+            optional(WsParser),
+            repeat!(choose!(GenericTypeNameParser, TypeNameParser), fixed("|"))
+        ).take(input);
+
+        match tokens {
+            Some(ts) => {
+                (Some(vec![Token::Union(ts)]), rest)
+            }
+            None => fail(input),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 struct RowTypeParser;
 
 impl Parser for RowTypeParser {
@@ -819,6 +842,7 @@ impl Parser for TypeParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
         choose!(
             RowTypeParser,
+            UnionParser,
             GenericTypeNameParser,
             TypeAliasParser,
             FunctionTypeParser,

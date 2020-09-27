@@ -47,6 +47,17 @@ impl Expression {
             (Type::Value(_), Expression::Constant(constant)) => {
                 Self::compare_types(expected, &constant.get_type())
             }
+            (Type::Union(variants), _) => {
+                for variant in variants {
+                    if self.check_type(ctx, variant).is_ok() {
+                        return Ok(());
+                    }
+                }
+                Err(TypeError::UnexpectedType(
+                    expected.clone(),
+                    format!("{:?}", self),
+                ))
+            }
             (Type::Row(Row::Known(row_type)), Expression::Row(row_value)) => {
                 if row_type.len() != row_value.len() {
                     return Err(TypeError::MistmatchRow(

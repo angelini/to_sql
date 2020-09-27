@@ -82,11 +82,6 @@ impl Runtime {
         match token {
             Token::Assignment(ident, expression_token) => {
                 let expression = self.as_expression(*expression_token)?;
-                println!(
-                    "checking type for: {}, expected: {:?}",
-                    ident,
-                    self.types.get(&ident)
-                );
                 expression.check_type(&self.types, self.types.get(&ident)?)?;
                 self.impls.insert(ident, expression)
             }
@@ -110,8 +105,16 @@ impl Runtime {
                     ("Col", Type::Value(Primitive::Known(base))) => {
                         Type::Column(Column::Known(base))
                     }
+                    ("Table", Type::Row(row)) => Type::Table(row),
                     _ => unimplemented!(),
                 }
+            }
+            Token::Union(variants) => {
+                let variant_types = variants
+                    .into_iter()
+                    .map(|variant| Ok(self.as_type(variant)?))
+                    .collect::<Result<Vec<Type>>>()?;
+                Type::Union(variant_types)
             }
             Token::RowType(row_tokens) => {
                 let row_types = row_tokens
@@ -246,6 +249,8 @@ fn main() -> Result<()> {
         "a :: Int",
         "foo :: (Int, Bool) -> Int",
         "bar :: R : Row :: (Int) -> Table<R>",
+        "Foo | Bar",
+        "Foo | Bar<Baz> | B",
     ] {
         println!("Type Input: {}", type_input);
         match parser::parse_type(type_input) {
@@ -276,6 +281,9 @@ fn main() -> Result<()> {
 
         row :: { a: A, 'b c': Bc }
         row = { a: colInt(1), 'b c': colBool(true) }
+
+        union :: Int | Bool
+        union = true
     ";
 
     let (type_tokens, expression_tokens) = parse_input(input)?;
