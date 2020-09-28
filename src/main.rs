@@ -220,6 +220,7 @@ fn main() -> Result<()> {
         "hello_world",
         "true",
         "'true'",
+        "b = 4",
         "foo(bar, baz, q)",
         "(foo, bar) -> 1",
         "{a}",
@@ -227,7 +228,9 @@ fn main() -> Result<()> {
         "{a; 'foo'; 1}",
         "foo.bar",
         "foo.'baz'",
-        "4.5"
+        "4.5",
+        "4 == 4",
+        "5 >= 3 == 2"
     ] {
         println!("Expression Input: {}", expression_input);
         match parser::parse_expression(expression_input) {
@@ -286,6 +289,10 @@ fn main() -> Result<()> {
         union :: Int | Bool
         union = true
     ";
+
+    // FIXME: Requires type checking generic args
+    // result :: Bool
+    // result = a == 5
 
     let (type_tokens, expression_tokens) = parse_input(input)?;
     let mut runtime = Runtime::new();

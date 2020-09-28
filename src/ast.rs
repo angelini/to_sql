@@ -67,7 +67,7 @@ impl Expression {
                 }
 
                 for ((exp_name, exp_type), (act_name, act_expr)) in
-                    row_type.iter().zip(row_value.into_iter())
+                    row_type.iter().zip(row_value.iter())
                 {
                     if exp_name != act_name {
                         return Err(TypeError::MistmatchRow(
@@ -75,7 +75,7 @@ impl Expression {
                             format!("{:?}", row_value),
                         ));
                     }
-                    act_expr.check_type(ctx, &Type::Column(Column::Known(exp_type.clone())))?
+                    act_expr.check_type(ctx, &Type::Column(Column::Known(*exp_type)))?
                 }
 
                 Ok(())

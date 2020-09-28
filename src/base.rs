@@ -39,7 +39,7 @@ impl fmt::Display for Identifier {
 
 pub fn ident<S: Into<String>>(value_s: S) -> Identifier {
     lazy_static! {
-        static ref RE: Regex = Regex::new(r"^[a-z][a-zA-Z0-9_\-]*$").unwrap();
+        static ref RE: Regex = Regex::new(r"^[a-z_][a-zA-Z0-9_\-]*$").unwrap();
     }
     let value = value_s.into();
     assert!(RE.is_match(&value), "Invalid identifier");

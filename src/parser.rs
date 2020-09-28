@@ -345,7 +345,7 @@ struct IdentifierParser;
 impl Parser for IdentifierParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
         lazy_static! {
-            static ref RE: Regex = Regex::new(r"^[a-z][a-zA-Z0-9_\-]*").unwrap();
+            static ref RE: Regex = Regex::new(r"^[a-z_][a-zA-Z0-9_\-]*").unwrap();
         }
         match RE.find(input) {
             Some(m) => {
@@ -534,6 +534,64 @@ impl Parser for ApplicationParser {
 }
 
 #[derive(Clone, Debug)]
+struct ComparatorParser;
+
+impl Parser for ComparatorParser {
+    fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
+        lazy_static! {
+            static ref RE: Regex = Regex::new(r"^(==|!=|>=|<=|>|<)").unwrap();
+        }
+        match RE.find(input) {
+            Some(m) => {
+                let cmp_fn = format!("__{}__", match m.as_str() {
+                    "==" => "eq",
+                    "!=" => "ne",
+                    ">=" => "gte",
+                    "<=" => "lte",
+                    ">" => "gt",
+                    "<" => "lt",
+                    _ => unreachable!()
+                });
+                (
+                    Some(vec![Token::Identifier(Identifier::new(cmp_fn))]),
+                    &input[m.end()..],
+                )
+            }
+            None => fail(input),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct InfixParser;
+
+impl Parser for InfixParser {
+    fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
+        let (tokens, rest) = chain!(
+            choose!(RowValueParser, ApplicationParser, AccessParser, ConstantParser, IdentifierParser),
+            optional(WsParser),
+            ComparatorParser,
+            optional(WsParser),
+            choose!(InfixParser, RowValueParser, ApplicationParser, AccessParser, ConstantParser, IdentifierParser)
+        )
+        .take(input);
+
+        match tokens {
+            Some(mut ts) => {
+                let right = ts.pop().unwrap();
+                let cmp = match ts.pop() {
+                    Some(Token::Identifier(ident)) => ident,
+                    _ => unreachable!(),
+                };
+                let left = ts.pop().unwrap();
+                (Some(vec![Token::Application(cmp, vec![left, right])]), rest)
+            }
+            None => fail(input),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 struct FunctionParser;
 
 impl Parser for FunctionParser {
@@ -574,6 +632,7 @@ struct ExpressionParser;
 impl Parser for ExpressionParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
         choose!(
+            InfixParser,
             RowValueParser,
             BlockParser,
             AssignmentParser,
@@ -625,7 +684,7 @@ impl Parser for GenericTypeNameParser {
                     .map(|token| match token {
                         Token::TypeName(name) => vec![name],
                         Token::GenericTypeName(names) => names,
-                        _ => unreachable!()
+                        _ => unreachable!(),
                     })
                     .flatten()
                     .collect();
@@ -647,12 +706,11 @@ impl Parser for UnionParser {
             fixed("|"),
             optional(WsParser),
             repeat!(choose!(GenericTypeNameParser, TypeNameParser), fixed("|"))
-        ).take(input);
+        )
+        .take(input);
 
         match tokens {
-            Some(ts) => {
-                (Some(vec![Token::Union(ts)]), rest)
-            }
+            Some(ts) => (Some(vec![Token::Union(ts)]), rest),
             None => fail(input),
         }
     }

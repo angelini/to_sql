@@ -120,12 +120,16 @@ impl Type {
             (Type::Union(variants), _) => {
                 for variant in variants {
                     if variant.captures(actual) {
-                        return true
+                        return true;
                     }
                 }
-                return false
+                return false;
             }
-            _ => unimplemented!(),
+            _ => {
+                dbg!(self);
+                dbg!(actual);
+                unimplemented!()
+            }
         }
     }
 }
@@ -148,7 +152,9 @@ impl fmt::Display for TypeError {
                 "expected {} function arguments, has {}",
                 expected, actual
             ),
-            TypeError::MistmatchRow(expected, actual) => write!(f, "expected: {:?}, actual: {}", expected, actual),
+            TypeError::MistmatchRow(expected, actual) => {
+                write!(f, "expected: {:?}, actual: {}", expected, actual)
+            }
             TypeError::MissingAlias(name) => write!(f, "missing type alias for: {}", name),
             TypeError::MissingAssignment(ident) => {
                 write!(f, "missing type assignment for: {}", ident)
@@ -249,16 +255,15 @@ fn std_base_types(ctx: &mut TypeContext) {
 
 fn std_column_functions(ctx: &mut TypeContext) {
     // col :: P : Primitive :: P -> Col<P>
-    {
-        ctx.add(
-            base::ident("col"),
-            func(
-                vec![Kind::Primitive],
-                vec![unknown_value(0, false)],
-                unknown_col(0, false),
-            ),
-        )
-    }
+
+    ctx.add(
+        base::ident("col"),
+        func(
+            vec![Kind::Primitive],
+            vec![unknown_value(0, false)],
+            unknown_col(0, false),
+        ),
+    );
 
     // sum :: N : Int | Float :: Col<N?> -> Value<N>
     // FIXME: Support unions
@@ -267,53 +272,60 @@ fn std_column_functions(ctx: &mut TypeContext) {
     // FIXME: Support unions
 
     // default :: P : Primitive :: Col<P?>, P -> Col<P>
-    {
-        ctx.add(
-            base::ident("default"),
-            func(
-                vec![Kind::Primitive],
-                vec![unknown_col(0, true), unknown_value(0, false)],
-                col(Base::Int(false)),
-            ),
-        )
-    }
+    ctx.add(
+        base::ident("default"),
+        func(
+            vec![Kind::Primitive],
+            vec![unknown_col(0, true), unknown_value(0, false)],
+            col(Base::Int(false)),
+        ),
+    );
 }
 
 fn std_table_functions(ctx: &mut TypeContext) {
     // select :: R1, R2 : Row :: Table<R1>, (R1 -> R2) -> Table<R2>
-    {
-        ctx.add(
-            base::ident("select"),
-            func(
-                vec![Kind::Row, Kind::Row],
-                vec![
-                    unknown_table(0),
-                    func(
-                        vec![Kind::Row, Kind::Row],
-                        vec![unknown_row(0)],
-                        unknown_row(1),
-                    ),
-                ],
-                unknown_table(1),
-            ),
-        );
-    }
+    ctx.add(
+        base::ident("select"),
+        func(
+            vec![Kind::Row, Kind::Row],
+            vec![
+                unknown_table(0),
+                func(
+                    vec![Kind::Row, Kind::Row],
+                    vec![unknown_row(0)],
+                    unknown_row(1),
+                ),
+            ],
+            unknown_table(1),
+        ),
+    );
 
     // filter :: R : Row :: Table<R>, (R -> Col<Bool>) -> Table<R>
-    {
-        ctx.add(
-            base::ident("filter"),
-            func(
-                vec![Kind::Row],
-                vec![
-                    unknown_table(0),
-                    func(
-                        vec![Kind::Row],
-                        vec![unknown_row(0)],
-                        col(Base::Bool(false)),
-                    ),
-                ],
+    ctx.add(
+        base::ident("filter"),
+        func(
+            vec![Kind::Row],
+            vec![
                 unknown_table(0),
+                func(
+                    vec![Kind::Row],
+                    vec![unknown_row(0)],
+                    col(Base::Bool(false)),
+                ),
+            ],
+            unknown_table(0),
+        ),
+    )
+}
+
+fn std_infix_functions(ctx: &mut TypeContext) {
+    for cmp in &["__eq__", "__ne__", "__gte__", "__lte__", "__gt__", "__lt__"] {
+        ctx.add(
+            base::ident(*cmp),
+            func(
+                vec![Kind::Primitive],
+                vec![unknown_value(0, true), unknown_value(0, true)],
+                unknown_col(0, false),
             ),
         )
     }
@@ -324,5 +336,6 @@ pub fn std() -> TypeContext {
     std_base_types(&mut ctx);
     std_column_functions(&mut ctx);
     std_table_functions(&mut ctx);
+    std_infix_functions(&mut ctx);
     ctx
 }
