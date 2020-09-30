@@ -123,8 +123,9 @@ impl Type {
                         return true;
                     }
                 }
-                return false;
+                false
             }
+            (Type::Value(Primitive::Unknown(_, _)), Type::Value(Primitive::Known(_))) => true,
             _ => {
                 dbg!(self);
                 dbg!(actual);
@@ -325,7 +326,7 @@ fn std_infix_functions(ctx: &mut TypeContext) {
             func(
                 vec![Kind::Primitive],
                 vec![unknown_value(0, true), unknown_value(0, true)],
-                unknown_col(0, false),
+                value(Base::Bool(false)),
             ),
         )
     }

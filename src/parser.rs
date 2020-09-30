@@ -15,6 +15,10 @@ pub type RowType = BTreeMap<ColumnName, TypeName>;
 
 pub type Kind = (TypeName, TypeName);
 
+trait Parser2<T>: std::fmt::Debug + ParserClone {
+    fn take<'a, 'b>(&'a self, input: &'b str) -> (T, &'b str);
+}
+
 #[derive(Clone, Debug)]
 pub enum Token {
     Constant(Constant),
@@ -24,6 +28,7 @@ pub enum Token {
     Block(Vec<Token>),
     Access(Identifier, ColumnName),
     Assignment(Identifier, Box<Token>),
+    Let(Identifier, Box<Token>),
     Application(Identifier, Vec<Token>),
     Function(Vec<Identifier>, Box<Token>),
 
@@ -76,6 +81,17 @@ where
 {
     fn from(parser: T) -> Self {
         Box::new(parser)
+    }
+}
+
+fn map_tokens<'a, F>(input: &'a str, parser: Box<dyn Parser>, func: F) -> (Tokens, &'a str)
+where
+    F: FnOnce(Vec<Token>) -> Vec<Token>,
+{
+    let (tokens, rest) = parser.take(input);
+    match tokens {
+        Some(ts) => (Some(func(ts)), rest),
+        None => fail(input),
     }
 }
 
@@ -362,25 +378,23 @@ struct KindParser;
 
 impl Parser for KindParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
-        let (tokens, rest) = chain!(
-            TypeNameParser,
-            optional(WsParser),
-            fixed(":"),
-            optional(WsParser),
-            TypeNameParser
-        )
-        .take(input);
-
-        match tokens {
-            Some(mut ts) => {
-                let kind = match (ts.remove(0), ts.remove(0)) {
+        map_tokens(
+            input,
+            Box::new(chain!(
+                TypeNameParser,
+                optional(WsParser),
+                fixed(":"),
+                optional(WsParser),
+                TypeNameParser
+            )),
+            |mut tokens| {
+                let kind = match (tokens.remove(0), tokens.remove(0)) {
                     (Token::TypeName(left), Token::TypeName(right)) => Token::Kind((left, right)),
                     _ => unreachable!(),
                 };
-                (Some(vec![kind]), rest)
-            }
-            None => fail(input),
-        }
+                vec![kind]
+            },
+        )
     }
 }
 
@@ -389,27 +403,26 @@ struct RowValueParser;
 
 impl Parser for RowValueParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
-        let (tokens, rest) = chain!(
-            fixed("{"),
-            repeat!(
-                chain!(
-                    choose!(IdentifierParser, StringParser),
-                    optional(WsParser),
-                    fixed(":"),
-                    optional(WsParser),
-                    ExpressionParser
+        map_tokens(
+            input,
+            Box::new(chain!(
+                fixed("{"),
+                repeat!(
+                    chain!(
+                        choose!(IdentifierParser, StringParser),
+                        optional(WsParser),
+                        fixed(":"),
+                        optional(WsParser),
+                        ExpressionParser
+                    ),
+                    fixed(",")
                 ),
-                fixed(",")
-            ),
-            fixed("}")
-        )
-        .take(input);
+                fixed("}")
+            )),
+            |tokens| {
+                let mut row_value = BTreeMap::new();
 
-        let mut row_value = BTreeMap::new();
-
-        match tokens {
-            Some(ts) => {
-                for mut chunk in ts.into_iter().chunks(2).into_iter() {
+                for mut chunk in tokens.into_iter().chunks(2).into_iter() {
                     let column_name = match chunk.next().unwrap() {
                         Token::Constant(Constant::String(s)) => ColumnName::new(s),
                         Token::Identifier(ident) => ident.into_column_name(),
@@ -417,10 +430,9 @@ impl Parser for RowValueParser {
                     };
                     row_value.insert(column_name, chunk.next().unwrap());
                 }
-                (Some(vec![Token::RowValue(row_value)]), rest)
-            }
-            None => fail(input),
-        }
+                vec![Token::RowValue(row_value)]
+            },
+        )
     }
 }
 
@@ -429,19 +441,17 @@ struct BlockParser;
 
 impl Parser for BlockParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
-        let (tokens, rest) = chain!(
-            fixed("{"),
-            optional(WsParser),
-            repeat!(ExpressionParser, fixed(";")),
-            optional(WsParser),
-            fixed("}")
+        map_tokens(
+            input,
+            Box::new(chain!(
+                fixed("{"),
+                optional(WsParser),
+                repeat!(ExpressionParser, fixed(";")),
+                optional(WsParser),
+                fixed("}")
+            )),
+            |tokens| vec![Token::Block(tokens)],
         )
-        .take(input);
-
-        match tokens {
-            Some(ts) => (Some(vec![Token::Block(ts)]), rest),
-            None => fail(input),
-        }
     }
 }
 
@@ -450,30 +460,28 @@ struct AccessParser;
 
 impl Parser for AccessParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
-        let (tokens, rest) = chain!(
-            IdentifierParser,
-            optional(WsParser),
-            fixed("."),
-            optional(WsParser),
-            choose!(IdentifierParser, StringParser)
-        )
-        .take(input);
-
-        match tokens {
-            Some(mut ts) => {
-                let column_name = match ts.pop() {
+        map_tokens(
+            input,
+            Box::new(chain!(
+                IdentifierParser,
+                optional(WsParser),
+                fixed("."),
+                optional(WsParser),
+                choose!(IdentifierParser, StringParser)
+            )),
+            |mut tokens| {
+                let column_name = match tokens.pop() {
                     Some(Token::Identifier(ident)) => ident.into_column_name(),
                     Some(Token::Constant(Constant::String(s))) => ColumnName::new(s),
                     _ => unreachable!(),
                 };
-                let ident = match ts.pop() {
+                let ident = match tokens.pop() {
                     Some(Token::Identifier(ident)) => ident,
                     _ => unreachable!(),
                 };
-                (Some(vec![Token::Access(ident, column_name)]), rest)
-            }
-            None => fail(input),
-        }
+                vec![Token::Access(ident, column_name)]
+            },
+        )
     }
 }
 
@@ -482,26 +490,52 @@ struct AssignmentParser;
 
 impl Parser for AssignmentParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
-        let (tokens, rest) = chain!(
-            IdentifierParser,
-            optional(WsParser),
-            fixed("="),
-            optional(WsParser),
-            ExpressionParser
-        )
-        .take(input);
-
-        match tokens {
-            Some(mut ts) => {
-                let expression = Box::new(ts.pop().unwrap());
-                let ident = match ts.pop() {
+        map_tokens(
+            input,
+            Box::new(chain!(
+                IdentifierParser,
+                optional(WsParser),
+                fixed("="),
+                optional(WsParser),
+                ExpressionParser
+            )),
+            |mut tokens| {
+                let expression = Box::new(tokens.pop().unwrap());
+                let ident = match tokens.pop() {
                     Some(Token::Identifier(ident)) => ident,
                     _ => unreachable!(),
                 };
-                (Some(vec![Token::Assignment(ident, expression)]), rest)
-            }
-            None => fail(input),
-        }
+                vec![Token::Assignment(ident, expression)]
+            },
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
+struct LetParser;
+
+impl Parser for LetParser {
+    fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
+        map_tokens(
+            input,
+            Box::new(chain!(
+                fixed("let"),
+                WsParser,
+                IdentifierParser,
+                optional(WsParser),
+                fixed("="),
+                optional(WsParser),
+                ExpressionParser
+            )),
+            |mut tokens| {
+                let expression = Box::new(tokens.pop().unwrap());
+                let ident = match tokens.pop() {
+                    Some(Token::Identifier(ident)) => ident,
+                    _ => unreachable!(),
+                };
+                vec![Token::Let(ident, expression)]
+            },
+        )
     }
 }
 
@@ -510,26 +544,24 @@ struct ApplicationParser;
 
 impl Parser for ApplicationParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
-        let (tokens, rest) = chain!(
-            IdentifierParser,
-            fixed("("),
-            optional(WsParser),
-            repeat!(ExpressionParser, fixed(",")),
-            optional(WsParser),
-            fixed(")")
-        )
-        .take(input);
-
-        match tokens {
-            Some(mut ts) => {
-                let ident = match ts.remove(0) {
+        map_tokens(
+            input,
+            Box::new(chain!(
+                IdentifierParser,
+                fixed("("),
+                optional(WsParser),
+                repeat!(ExpressionParser, fixed(",")),
+                optional(WsParser),
+                fixed(")")
+            )),
+            |mut tokens| {
+                let ident = match tokens.remove(0) {
                     Token::Identifier(ident) => ident,
                     _ => unreachable!(),
                 };
-                (Some(vec![Token::Application(ident, ts)]), rest)
-            }
-            None => fail(input),
-        }
+                vec![Token::Application(ident, tokens)]
+            },
+        )
     }
 }
 
@@ -543,15 +575,18 @@ impl Parser for ComparatorParser {
         }
         match RE.find(input) {
             Some(m) => {
-                let cmp_fn = format!("__{}__", match m.as_str() {
-                    "==" => "eq",
-                    "!=" => "ne",
-                    ">=" => "gte",
-                    "<=" => "lte",
-                    ">" => "gt",
-                    "<" => "lt",
-                    _ => unreachable!()
-                });
+                let cmp_fn = format!(
+                    "__{}__",
+                    match m.as_str() {
+                        "==" => "eq",
+                        "!=" => "ne",
+                        ">=" => "gte",
+                        "<=" => "lte",
+                        ">" => "gt",
+                        "<" => "lt",
+                        _ => unreachable!(),
+                    }
+                );
                 (
                     Some(vec![Token::Identifier(Identifier::new(cmp_fn))]),
                     &input[m.end()..],
@@ -567,27 +602,38 @@ struct InfixParser;
 
 impl Parser for InfixParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
-        let (tokens, rest) = chain!(
-            choose!(RowValueParser, ApplicationParser, AccessParser, ConstantParser, IdentifierParser),
-            optional(WsParser),
-            ComparatorParser,
-            optional(WsParser),
-            choose!(InfixParser, RowValueParser, ApplicationParser, AccessParser, ConstantParser, IdentifierParser)
-        )
-        .take(input);
-
-        match tokens {
-            Some(mut ts) => {
-                let right = ts.pop().unwrap();
-                let cmp = match ts.pop() {
+        map_tokens(
+            input,
+            Box::new(chain!(
+                choose!(
+                    RowValueParser,
+                    ApplicationParser,
+                    AccessParser,
+                    ConstantParser,
+                    IdentifierParser
+                ),
+                optional(WsParser),
+                ComparatorParser,
+                optional(WsParser),
+                choose!(
+                    InfixParser,
+                    RowValueParser,
+                    ApplicationParser,
+                    AccessParser,
+                    ConstantParser,
+                    IdentifierParser
+                )
+            )),
+            |mut tokens| {
+                let right = tokens.pop().unwrap();
+                let cmp = match tokens.pop() {
                     Some(Token::Identifier(ident)) => ident,
                     _ => unreachable!(),
                 };
-                let left = ts.pop().unwrap();
-                (Some(vec![Token::Application(cmp, vec![left, right])]), rest)
-            }
-            None => fail(input),
-        }
+                let left = tokens.pop().unwrap();
+                vec![Token::Application(cmp, vec![left, right])]
+            },
+        )
     }
 }
 
@@ -596,33 +642,31 @@ struct FunctionParser;
 
 impl Parser for FunctionParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
-        let (tokens, rest) = chain!(
-            fixed("("),
-            optional(WsParser),
-            repeat!(IdentifierParser, fixed(",")),
-            optional(WsParser),
-            fixed(")"),
-            optional(WsParser),
-            fixed("->"),
-            optional(WsParser),
-            ExpressionParser
-        )
-        .take(input);
-
-        match tokens {
-            Some(mut ts) => {
-                let body = ts.pop().unwrap();
-                let arguments = ts
+        map_tokens(
+            input,
+            Box::new(chain!(
+                fixed("("),
+                optional(WsParser),
+                repeat!(IdentifierParser, fixed(",")),
+                optional(WsParser),
+                fixed(")"),
+                optional(WsParser),
+                fixed("->"),
+                optional(WsParser),
+                ExpressionParser
+            )),
+            |mut tokens| {
+                let body = tokens.pop().unwrap();
+                let arguments = tokens
                     .into_iter()
                     .map(|ident_token| match ident_token {
                         Token::Identifier(ident) => ident,
                         _ => unreachable!(),
                     })
                     .collect();
-                (Some(vec![Token::Function(arguments, Box::new(body))]), rest)
-            }
-            None => fail(input),
-        }
+                vec![Token::Function(arguments, Box::new(body))]
+            },
+        )
     }
 }
 
@@ -635,7 +679,7 @@ impl Parser for ExpressionParser {
             InfixParser,
             RowValueParser,
             BlockParser,
-            AssignmentParser,
+            LetParser,
             ApplicationParser,
             AccessParser,
             FunctionParser,
@@ -669,17 +713,16 @@ struct GenericTypeNameParser;
 
 impl Parser for GenericTypeNameParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
-        let (tokens, rest) = chain!(
-            TypeNameParser,
-            fixed("<"),
-            choose!(GenericTypeNameParser, TypeNameParser),
-            fixed(">")
-        )
-        .take(input);
-
-        match tokens {
-            Some(ts) => {
-                let type_names = ts
+        map_tokens(
+            input,
+            Box::new(chain!(
+                TypeNameParser,
+                fixed("<"),
+                choose!(GenericTypeNameParser, TypeNameParser),
+                fixed(">")
+            )),
+            |tokens| {
+                let type_names = tokens
                     .into_iter()
                     .map(|token| match token {
                         Token::TypeName(name) => vec![name],
@@ -688,10 +731,9 @@ impl Parser for GenericTypeNameParser {
                     })
                     .flatten()
                     .collect();
-                (Some(vec![Token::GenericTypeName(type_names)]), rest)
-            }
-            None => fail(input),
-        }
+                vec![Token::GenericTypeName(type_names)]
+            },
+        )
     }
 }
 
@@ -700,19 +742,17 @@ struct UnionParser;
 
 impl Parser for UnionParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
-        let (tokens, rest) = chain!(
-            choose!(GenericTypeNameParser, TypeNameParser),
-            optional(WsParser),
-            fixed("|"),
-            optional(WsParser),
-            repeat!(choose!(GenericTypeNameParser, TypeNameParser), fixed("|"))
+        map_tokens(
+            input,
+            Box::new(chain!(
+                choose!(GenericTypeNameParser, TypeNameParser),
+                optional(WsParser),
+                fixed("|"),
+                optional(WsParser),
+                repeat!(choose!(GenericTypeNameParser, TypeNameParser), fixed("|"))
+            )),
+            |tokens| vec![Token::Union(tokens)],
         )
-        .take(input);
-
-        match tokens {
-            Some(ts) => (Some(vec![Token::Union(ts)]), rest),
-            None => fail(input),
-        }
     }
 }
 
@@ -721,27 +761,26 @@ struct RowTypeParser;
 
 impl Parser for RowTypeParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
-        let (tokens, rest) = chain!(
-            fixed("{"),
-            repeat!(
-                chain!(
-                    choose!(IdentifierParser, StringParser),
-                    optional(WsParser),
-                    fixed(":"),
-                    optional(WsParser),
-                    TypeNameParser
+        map_tokens(
+            input,
+            Box::new(chain!(
+                fixed("{"),
+                repeat!(
+                    chain!(
+                        choose!(IdentifierParser, StringParser),
+                        optional(WsParser),
+                        fixed(":"),
+                        optional(WsParser),
+                        TypeNameParser
+                    ),
+                    fixed(",")
                 ),
-                fixed(",")
-            ),
-            fixed("}")
-        )
-        .take(input);
+                fixed("}")
+            )),
+            |tokens| {
+                let mut row_type = BTreeMap::new();
 
-        let mut row_type = BTreeMap::new();
-
-        match tokens {
-            Some(ts) => {
-                for mut chunk in ts.into_iter().chunks(2).into_iter() {
+                for mut chunk in tokens.into_iter().chunks(2).into_iter() {
                     let column_name = match chunk.next().unwrap() {
                         Token::Constant(Constant::String(s)) => ColumnName::new(s),
                         Token::Identifier(ident) => ident.into_column_name(),
@@ -753,10 +792,9 @@ impl Parser for RowTypeParser {
                     };
                     row_type.insert(column_name, type_name);
                 }
-                (Some(vec![Token::RowType(row_type)]), rest)
-            }
-            None => fail(input),
-        }
+                vec![Token::RowType(row_type)]
+            },
+        )
     }
 }
 
@@ -765,28 +803,26 @@ struct TypeAliasParser;
 
 impl Parser for TypeAliasParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
-        let (tokens, rest) = chain!(
-            fixed("type"),
-            optional(WsParser),
-            TypeNameParser,
-            optional(WsParser),
-            fixed("="),
-            optional(WsParser),
-            TypeParser
-        )
-        .take(input);
-
-        match tokens {
-            Some(mut ts) => {
-                let typ = ts.pop().unwrap();
-                let name = match ts.pop() {
+        map_tokens(
+            input,
+            Box::new(chain!(
+                fixed("type"),
+                optional(WsParser),
+                TypeNameParser,
+                optional(WsParser),
+                fixed("="),
+                optional(WsParser),
+                TypeParser
+            )),
+            |mut tokens| {
+                let typ = tokens.pop().unwrap();
+                let name = match tokens.pop() {
                     Some(Token::TypeName(type_name)) => type_name,
                     _ => unreachable!(),
                 };
-                (Some(vec![Token::TypeAlias(name, Box::new(typ))]), rest)
-            }
-            None => fail(input),
-        }
+                vec![Token::TypeAlias(name, Box::new(typ))]
+            },
+        )
     }
 }
 
@@ -795,29 +831,24 @@ struct FunctionTypeParser;
 
 impl Parser for FunctionTypeParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
-        let (tokens, rest) = chain!(
-            fixed("("),
-            optional(WsParser),
-            repeat!(TypeParser, fixed(",")),
-            optional(WsParser),
-            fixed(")"),
-            optional(WsParser),
-            fixed("->"),
-            optional(WsParser),
-            TypeParser
+        map_tokens(
+            input,
+            Box::new(chain!(
+                fixed("("),
+                optional(WsParser),
+                repeat!(TypeParser, fixed(",")),
+                optional(WsParser),
+                fixed(")"),
+                optional(WsParser),
+                fixed("->"),
+                optional(WsParser),
+                TypeParser
+            )),
+            |mut tokens| {
+                let return_type = tokens.pop().unwrap();
+                vec![Token::FunctionType(tokens, Box::new(return_type))]
+            },
         )
-        .take(input);
-
-        match tokens {
-            Some(mut ts) => {
-                let return_type = ts.pop().unwrap();
-                (
-                    Some(vec![Token::FunctionType(ts, Box::new(return_type))]),
-                    rest,
-                )
-            }
-            None => fail(input),
-        }
     }
 }
 
@@ -826,26 +857,24 @@ struct TypeAssignmentParser;
 
 impl Parser for TypeAssignmentParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
-        let (tokens, rest) = chain!(
-            IdentifierParser,
-            optional(WsParser),
-            fixed("::"),
-            optional(WsParser),
-            TypeParser
-        )
-        .take(input);
-
-        match tokens {
-            Some(mut ts) => {
-                let typ = Box::new(ts.pop().unwrap());
-                let ident = match ts.pop() {
+        map_tokens(
+            input,
+            Box::new(chain!(
+                IdentifierParser,
+                optional(WsParser),
+                fixed("::"),
+                optional(WsParser),
+                TypeParser
+            )),
+            |mut tokens| {
+                let typ = Box::new(tokens.pop().unwrap());
+                let ident = match tokens.pop() {
                     Some(Token::Identifier(ident)) => ident,
                     _ => unreachable!(),
                 };
-                (Some(vec![Token::TypeAssignment(ident, typ)]), rest)
-            }
-            None => fail(input),
-        }
+                vec![Token::TypeAssignment(ident, typ)]
+            },
+        )
     }
 }
 
@@ -854,42 +883,36 @@ struct GenericTypeAssignmentParser;
 
 impl Parser for GenericTypeAssignmentParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
-        let (tokens, rest) = chain!(
-            IdentifierParser,
-            optional(WsParser),
-            fixed("::"),
-            optional(WsParser),
-            repeat!(KindParser, fixed(",")),
-            optional(WsParser),
-            fixed("::"),
-            optional(WsParser),
-            TypeParser
-        )
-        .take(input);
-
-        match tokens {
-            Some(mut ts) => {
-                let typ = Box::new(ts.pop().unwrap());
-                let ident = match ts.remove(0) {
+        map_tokens(
+            input,
+            Box::new(chain!(
+                IdentifierParser,
+                optional(WsParser),
+                fixed("::"),
+                optional(WsParser),
+                repeat!(KindParser, fixed(",")),
+                optional(WsParser),
+                fixed("::"),
+                optional(WsParser),
+                TypeParser
+            )),
+            |mut tokens| {
+                let typ = Box::new(tokens.pop().unwrap());
+                let ident = match tokens.remove(0) {
                     Token::Identifier(ident) => ident,
                     _ => unreachable!(),
                 };
 
-                let kinds = ts
+                let kinds = tokens
                     .into_iter()
                     .map(|token| match token {
                         Token::Kind(kind) => kind,
                         _ => unreachable!(),
                     })
                     .collect();
-
-                (
-                    Some(vec![Token::GenericTypeAssignment(ident, kinds, typ)]),
-                    rest,
-                )
-            }
-            None => fail(input),
-        }
+                vec![Token::GenericTypeAssignment(ident, kinds, typ)]
+            },
+        )
     }
 }
 

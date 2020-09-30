@@ -28,14 +28,12 @@ impl Constant {
     }
 }
 
-pub type RowValue = BTreeMap<ColumnName, Expression>;
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Expression {
     Constant(Constant),
     Variable(Identifier),
-    Row(RowValue),
-    Assignment(Identifier, Box<Expression>),
+    Row(BTreeMap<ColumnName, Expression>),
+    Let(Identifier, Box<Expression>),
     Application(Identifier, Vec<Expression>),
     Block(Vec<Expression>, Box<Expression>),
     Function(Vec<Identifier>, Box<Expression>),
@@ -113,7 +111,7 @@ impl Expression {
                 let nested_ctx = ctx.clone();
                 for assignment in assignments {
                     match assignment {
-                        Expression::Assignment(ident, expression) => {
+                        Expression::Let(ident, expression) => {
                             expression.check_type(&nested_ctx, nested_ctx.get(ident)?)?
                         }
                         _ => unimplemented!(),

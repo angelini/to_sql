@@ -1,5 +1,6 @@
 mod ast;
 mod base;
+mod interpreter;
 mod parser;
 mod sql;
 mod types;
@@ -140,8 +141,8 @@ impl Runtime {
         Ok(match token {
             Token::Constant(constant) => Expression::Constant(constant),
             Token::Identifier(ident) => Expression::Variable(ident),
-            Token::Assignment(ident, body) => {
-                Expression::Assignment(ident, Box::new(self.as_expression(*body)?))
+            Token::Let(ident, body) => {
+                Expression::Let(ident, Box::new(self.as_expression(*body)?))
             }
             Token::Application(ident, arguments) => Expression::Application(
                 ident,
@@ -288,11 +289,10 @@ fn main() -> Result<()> {
 
         union :: Int | Bool
         union = true
-    ";
 
-    // FIXME: Requires type checking generic args
-    // result :: Bool
-    // result = a == 5
+        result :: Bool
+        result = a == 5
+    ";
 
     let (type_tokens, expression_tokens) = parse_input(input)?;
     let mut runtime = Runtime::new();
