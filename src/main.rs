@@ -2,6 +2,7 @@ mod ast;
 mod base;
 mod interpreter;
 mod parser;
+mod parser_new;
 mod sql;
 mod types;
 

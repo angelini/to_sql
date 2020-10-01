@@ -15,10 +15,6 @@ pub type RowType = BTreeMap<ColumnName, TypeName>;
 
 pub type Kind = (TypeName, TypeName);
 
-trait Parser2<T>: std::fmt::Debug + ParserClone {
-    fn take<'a, 'b>(&'a self, input: &'b str) -> (T, &'b str);
-}
-
 #[derive(Clone, Debug)]
 pub enum Token {
     Constant(Constant),
