@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use crate::base;
-use crate::base::{ColumnName, Identifier, TypeName};
+use crate::base::{ColumnName, Identifier, Kind, Kinds, TypeName};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Base {
@@ -26,33 +26,37 @@ impl Base {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Kind {
-    Primitive,
-    Row,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Primitive {
     Known(Base),
-    Unknown(usize, bool),
+    Unknown(TypeName, bool),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Column {
     Known(Base),
-    Unknown(usize, bool),
+    Unknown(TypeName, bool),
+}
+
+impl Column {
+    fn captures(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Column::Known(expected), Column::Known(actual)) => expected.captures(actual),
+            (Column::Unknown(_, _), _) => true,
+            _ => unimplemented!()
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RowSchema(BTreeMap<ColumnName, Base>);
+pub struct RowSchema(BTreeMap<ColumnName, Column>);
 
 impl RowSchema {
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
-    pub fn iter(&self) -> std::collections::btree_map::Iter<ColumnName, Base> {
+    pub fn iter(&self) -> std::collections::btree_map::Iter<ColumnName, Column> {
         self.0.iter()
     }
 
@@ -74,7 +78,7 @@ impl RowSchema {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Row {
     Known(RowSchema),
-    Unknown(usize),
+    Unknown(TypeName),
 }
 
 impl Row {
@@ -84,7 +88,8 @@ impl Row {
                 .into_iter()
                 .map(|(name, typ)| {
                     let base = match typ {
-                        Type::Value(Primitive::Known(base)) => base,
+                        Type::Value(Primitive::Known(base)) => Column::Known(base),
+                        Type::Value(Primitive::Unknown(name, null)) => Column::Unknown(name, null),
                         _ => unimplemented!(),
                     };
                     (name, base)
@@ -101,7 +106,7 @@ pub enum Type {
     Row(Row),
     Table(Row),
     GroupedTable(Row, Row),
-    Function(Vec<Kind>, Vec<Type>, Box<Type>),
+    Function(Vec<Type>, Box<Type>),
     List(Box<Type>),
     Union(Vec<Type>),
 }
@@ -126,6 +131,7 @@ impl Type {
                 false
             }
             (Type::Value(Primitive::Unknown(_, _)), Type::Value(Primitive::Known(_))) => true,
+            (Type::Column(Column::Unknown(_, _)), Type::Column(Column::Known(_))) => true,
             _ => {
                 dbg!(self);
                 dbg!(actual);
@@ -174,34 +180,56 @@ fn value(base: Base) -> Type {
     Type::Value(Primitive::Known(base))
 }
 
-fn unknown_value(id: usize, nullable: bool) -> Type {
-    Type::Value(Primitive::Unknown(id, nullable))
+fn unknown_value<S: Into<String>>(name: S, nullable: bool) -> Type {
+    Type::Value(Primitive::Unknown(base::type_name(name), nullable))
 }
 
 fn col(base: Base) -> Type {
     Type::Column(Column::Known(base))
 }
 
-fn unknown_col(id: usize, nullable: bool) -> Type {
-    Type::Column(Column::Unknown(id, nullable))
+fn unknown_col<S: Into<String>>(name: S, nullable: bool) -> Type {
+    Type::Column(Column::Unknown(base::type_name(name), nullable))
 }
 
-fn unknown_row(id: usize) -> Type {
-    Type::Row(Row::Unknown(id))
+fn unknown_row<S: Into<String>>(name: S) -> Type {
+    Type::Row(Row::Unknown(base::type_name(name)))
 }
 
-fn func(kinds: Vec<Kind>, args: Vec<Type>, ret: Type) -> Type {
-    Type::Function(kinds, args, Box::new(ret))
+fn func(args: Vec<Type>, ret: Type) -> Type {
+    Type::Function(args, Box::new(ret))
 }
 
-fn unknown_table(id: usize) -> Type {
-    Type::Table(Row::Unknown(id))
+fn unknown_table<S: Into<String>>(name: S) -> Type {
+    Type::Table(Row::Unknown(base::type_name(name)))
+}
+
+#[derive(Clone, Debug)]
+struct BoundType {
+    kinds: Kinds,
+    typ: Type,
+}
+
+impl BoundType {
+    fn new(kinds: Kinds, typ: Type) -> BoundType {
+        BoundType {
+            kinds: kinds,
+            typ: typ,
+        }
+    }
+
+    fn from_type(typ: Type) -> BoundType {
+        BoundType {
+            kinds: Kinds::empty(),
+            typ: typ,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct TypeContext {
-    aliases: HashMap<TypeName, Type>,
-    assignments: HashMap<Identifier, Type>,
+    aliases: HashMap<TypeName, BoundType>,
+    assignments: HashMap<Identifier, BoundType>,
 }
 
 impl TypeContext {
@@ -213,22 +241,24 @@ impl TypeContext {
     }
 
     pub fn alias(&mut self, name: TypeName, typ: Type) {
-        self.aliases.insert(name, typ);
+        self.aliases.insert(name, BoundType::from_type(typ));
     }
 
     pub fn lookup_alias(&self, name: &TypeName) -> Result<&Type, TypeError> {
         self.aliases
             .get(name)
+            .map(|bound| &bound.typ)
             .ok_or_else(|| TypeError::MissingAlias(name.clone()))
     }
 
-    pub fn add(&mut self, id: Identifier, typ: Type) {
-        self.assignments.insert(id, typ);
+    pub fn add(&mut self, id: Identifier, kinds: Kinds, typ: Type) {
+        self.assignments.insert(id, BoundType::new(kinds, typ));
     }
 
     pub fn get(&self, id: &Identifier) -> Result<&Type, TypeError> {
         self.assignments
             .get(id)
+            .map(|bound| &bound.typ)
             .ok_or_else(|| TypeError::MissingAssignment(id.clone()))
     }
 }
@@ -259,11 +289,8 @@ fn std_column_functions(ctx: &mut TypeContext) {
 
     ctx.add(
         base::ident("col"),
-        func(
-            vec![Kind::Primitive],
-            vec![unknown_value(0, false)],
-            unknown_col(0, false),
-        ),
+        base::kinds(vec![("P", Kind::Primitive)]),
+        func(vec![unknown_value("P", false)], unknown_col("P", false)),
     );
 
     // sum :: N : Int | Float :: Col<N?> -> Value<N>
@@ -275,9 +302,9 @@ fn std_column_functions(ctx: &mut TypeContext) {
     // default :: P : Primitive :: Col<P?>, P -> Col<P>
     ctx.add(
         base::ident("default"),
+        base::kinds(vec![("P", Kind::Primitive)]),
         func(
-            vec![Kind::Primitive],
-            vec![unknown_col(0, true), unknown_value(0, false)],
+            vec![unknown_col("P", true), unknown_value("P", false)],
             col(Base::Int(false)),
         ),
     );
@@ -287,34 +314,20 @@ fn std_table_functions(ctx: &mut TypeContext) {
     // select :: R1, R2 : Row :: Table<R1>, (R1 -> R2) -> Table<R2>
     ctx.add(
         base::ident("select"),
+        base::kinds(vec![("R1", Kind::Row), ("R2", Kind::Row)]),
         func(
-            vec![Kind::Row, Kind::Row],
-            vec![
-                unknown_table(0),
-                func(
-                    vec![Kind::Row, Kind::Row],
-                    vec![unknown_row(0)],
-                    unknown_row(1),
-                ),
-            ],
-            unknown_table(1),
+            vec![func(vec![unknown_row("R1")], unknown_row("R2"))],
+            unknown_table("R2"),
         ),
     );
 
     // filter :: R : Row :: Table<R>, (R -> Col<Bool>) -> Table<R>
     ctx.add(
         base::ident("filter"),
+        base::kinds(vec![("R", Kind::Row)]),
         func(
-            vec![Kind::Row],
-            vec![
-                unknown_table(0),
-                func(
-                    vec![Kind::Row],
-                    vec![unknown_row(0)],
-                    col(Base::Bool(false)),
-                ),
-            ],
-            unknown_table(0),
+            vec![func(vec![unknown_row("R")], col(Base::Bool(false)))],
+            unknown_table("R"),
         ),
     )
 }
@@ -323,9 +336,9 @@ fn std_infix_functions(ctx: &mut TypeContext) {
     for cmp in &["__eq__", "__ne__", "__gte__", "__lte__", "__gt__", "__lt__"] {
         ctx.add(
             base::ident(*cmp),
+            base::kinds(vec![("P", Kind::Primitive)]),
             func(
-                vec![Kind::Primitive],
-                vec![unknown_value(0, true), unknown_value(0, true)],
+                vec![unknown_value("P", true), unknown_value("P", true)],
                 value(Base::Bool(false)),
             ),
         )

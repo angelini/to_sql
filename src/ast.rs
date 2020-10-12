@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use chrono::naive::NaiveDate;
 use rust_decimal::Decimal;
 
-use crate::base::{ColumnName, Identifier};
+use crate::base::{ColumnName, Identifier, Kinds};
 use crate::types::{Base, Column, Primitive, Row, Type, TypeContext, TypeError};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -73,12 +73,12 @@ impl Expression {
                             format!("{:?}", row_value),
                         ));
                     }
-                    act_expr.check_type(ctx, &Type::Column(Column::Known(*exp_type)))?
+                    act_expr.check_type(ctx, &Type::Column(exp_type.clone()))?
                 }
 
                 Ok(())
             }
-            (Type::Function(_, arg_types, body_type), Expression::Function(arg_idents, body)) => {
+            (Type::Function(arg_types, body_type), Expression::Function(arg_idents, body)) => {
                 let mut nested_ctx = ctx.clone();
 
                 if arg_types.len() != arg_idents.len() {
@@ -89,14 +89,14 @@ impl Expression {
                 }
 
                 for (idx, arg_ident) in arg_idents.iter().enumerate() {
-                    nested_ctx.add(arg_ident.clone(), arg_types[idx].clone())
+                    nested_ctx.add(arg_ident.clone(), Kinds::empty(), arg_types[idx].clone())
                 }
                 body.check_type(&nested_ctx, body_type)
             }
 
             (_, Expression::Variable(ident)) => Self::compare_types(expected, ctx.get(ident)?),
             (_, Expression::Application(ident, arg_expressions)) => {
-                if let Type::Function(_, expected_args, actual) = ctx.get(ident)? {
+                if let Type::Function(expected_args, actual) = ctx.get(ident)? {
                     for (expression, expected_arg) in
                         arg_expressions.iter().zip(expected_args.iter())
                     {

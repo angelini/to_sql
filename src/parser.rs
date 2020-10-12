@@ -8,26 +8,18 @@ use regex::Regex;
 use rust_decimal::Decimal;
 
 use crate::ast::Constant;
-use crate::base::{ColumnName, Identifier, TypeName};
+use crate::base::{ColumnName, Identifier, Kind, Kinds, TypeName};
 
 pub type RowValue = BTreeMap<ColumnName, Token>;
 pub type RowType = BTreeMap<ColumnName, TypeName>;
-
-pub type Kind = (TypeName, TypeName);
-
-trait Parser2<T>: std::fmt::Debug + ParserClone {
-    fn take<'a, 'b>(&'a self, input: &'b str) -> (T, &'b str);
-}
 
 #[derive(Clone, Debug)]
 pub enum Token {
     Constant(Constant),
     Identifier(Identifier),
-    Kind(Kind),
     RowValue(RowValue),
     Block(Vec<Token>),
     Access(Identifier, ColumnName),
-    Assignment(Identifier, Box<Token>),
     Let(Identifier, Box<Token>),
     Application(Identifier, Vec<Token>),
     Function(Vec<Identifier>, Box<Token>),
@@ -37,9 +29,12 @@ pub enum Token {
     Union(Vec<Token>),
     RowType(RowType),
     TypeAlias(TypeName, Box<Token>),
+    NamedKind(TypeName, Kind),
     FunctionType(Vec<Token>, Box<Token>),
+
+    Assignment(Identifier, Box<Token>),
     TypeAssignment(Identifier, Box<Token>),
-    GenericTypeAssignment(Identifier, Vec<Kind>, Box<Token>),
+    GenericTypeAssignment(Identifier, Kinds, Box<Token>),
 }
 
 type Tokens = Option<Vec<Token>>;
@@ -184,12 +179,41 @@ macro_rules! chain {
 }
 
 #[derive(Clone, Debug)]
-struct RepeatParser {
+struct RepeatParser(Box<dyn Parser>);
+
+impl Parser for RepeatParser {
+    fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
+        let mut all_tokens = vec![];
+        let mut remaining = input;
+
+        loop {
+            let (tokens, rest) =
+                chain!(optional(WsParser), self.0.clone(), optional(WsParser)).take(remaining);
+            remaining = rest;
+
+            match tokens {
+                Some(mut ts) => {
+                    all_tokens.append(&mut ts);
+                }
+                None => return (Some(all_tokens), rest),
+            }
+        }
+    }
+}
+
+macro_rules! repeat {
+    ($parser:expr) => {
+        RepeatParser($parser.into())
+    };
+}
+
+#[derive(Clone, Debug)]
+struct DelimitedParser {
     parser: Box<dyn Parser>,
     delimiter: Box<dyn Parser>,
 }
 
-impl Parser for RepeatParser {
+impl Parser for DelimitedParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
         let mut all_tokens = vec![];
         let mut remaining = input;
@@ -222,9 +246,9 @@ impl Parser for RepeatParser {
     }
 }
 
-macro_rules! repeat {
+macro_rules! delimited {
     ($parser:expr, $delimiter:expr) => {
-        RepeatParser {
+        DelimitedParser {
             parser: $parser.into(),
             delimiter: $delimiter.into(),
         }
@@ -232,12 +256,20 @@ macro_rules! repeat {
 }
 
 #[derive(Clone, Debug)]
-struct FixedParser(String);
+struct FixedParser {
+    pattern: String,
+    capture: bool,
+}
 
 impl Parser for FixedParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
-        if input.starts_with(&self.0) {
-            (Some(vec![]), &input[(self.0.len())..])
+        if input.starts_with(&self.pattern) {
+            let tokens = if self.capture {
+                constant(Constant::String(self.pattern.clone()))
+            } else {
+                Some(vec![])
+            };
+            (tokens, &input[(self.pattern.len())..])
         } else {
             fail(input)
         }
@@ -245,7 +277,17 @@ impl Parser for FixedParser {
 }
 
 fn fixed<S: Into<String>>(value: S) -> FixedParser {
-    FixedParser(value.into())
+    FixedParser {
+        pattern: value.into(),
+        capture: false,
+    }
+}
+
+fn capture<S: Into<String>>(value: S) -> FixedParser {
+    FixedParser {
+        pattern: value.into(),
+        capture: true,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -374,9 +416,9 @@ impl Parser for IdentifierParser {
 }
 
 #[derive(Clone, Debug)]
-struct KindParser;
+struct NamedKindParser;
 
-impl Parser for KindParser {
+impl Parser for NamedKindParser {
     fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
         map_tokens(
             input,
@@ -385,14 +427,13 @@ impl Parser for KindParser {
                 optional(WsParser),
                 fixed(":"),
                 optional(WsParser),
-                TypeNameParser
+                choose!(capture("Row"), capture("Primitive"))
             )),
-            |mut tokens| {
-                let kind = match (tokens.remove(0), tokens.remove(0)) {
-                    (Token::TypeName(left), Token::TypeName(right)) => Token::Kind((left, right)),
-                    _ => unreachable!(),
-                };
-                vec![kind]
+            |mut tokens| match (tokens.remove(0), tokens.remove(0)) {
+                (Token::TypeName(name), Token::Constant(Constant::String(kind_str))) => {
+                    vec![Token::NamedKind(name, Kind::from_str(&kind_str).unwrap())]
+                }
+                _ => unreachable!(),
             },
         )
     }
@@ -407,7 +448,7 @@ impl Parser for RowValueParser {
             input,
             Box::new(chain!(
                 fixed("{"),
-                repeat!(
+                delimited!(
                     chain!(
                         choose!(IdentifierParser, StringParser),
                         optional(WsParser),
@@ -446,7 +487,7 @@ impl Parser for BlockParser {
             Box::new(chain!(
                 fixed("{"),
                 optional(WsParser),
-                repeat!(ExpressionParser, fixed(";")),
+                delimited!(ExpressionParser, fixed(";")),
                 optional(WsParser),
                 fixed("}")
             )),
@@ -550,7 +591,7 @@ impl Parser for ApplicationParser {
                 IdentifierParser,
                 fixed("("),
                 optional(WsParser),
-                repeat!(ExpressionParser, fixed(",")),
+                delimited!(ExpressionParser, fixed(",")),
                 optional(WsParser),
                 fixed(")")
             )),
@@ -647,7 +688,7 @@ impl Parser for FunctionParser {
             Box::new(chain!(
                 fixed("("),
                 optional(WsParser),
-                repeat!(IdentifierParser, fixed(",")),
+                delimited!(IdentifierParser, fixed(",")),
                 optional(WsParser),
                 fixed(")"),
                 optional(WsParser),
@@ -749,7 +790,7 @@ impl Parser for UnionParser {
                 optional(WsParser),
                 fixed("|"),
                 optional(WsParser),
-                repeat!(choose!(GenericTypeNameParser, TypeNameParser), fixed("|"))
+                delimited!(choose!(GenericTypeNameParser, TypeNameParser), fixed("|"))
             )),
             |tokens| vec![Token::Union(tokens)],
         )
@@ -765,7 +806,7 @@ impl Parser for RowTypeParser {
             input,
             Box::new(chain!(
                 fixed("{"),
-                repeat!(
+                delimited!(
                     chain!(
                         choose!(IdentifierParser, StringParser),
                         optional(WsParser),
@@ -836,7 +877,7 @@ impl Parser for FunctionTypeParser {
             Box::new(chain!(
                 fixed("("),
                 optional(WsParser),
-                repeat!(TypeParser, fixed(",")),
+                delimited!(TypeParser, fixed(",")),
                 optional(WsParser),
                 fixed(")"),
                 optional(WsParser),
@@ -890,7 +931,7 @@ impl Parser for GenericTypeAssignmentParser {
                 optional(WsParser),
                 fixed("::"),
                 optional(WsParser),
-                repeat!(KindParser, fixed(",")),
+                delimited!(NamedKindParser, fixed(",")),
                 optional(WsParser),
                 fixed("::"),
                 optional(WsParser),
@@ -906,11 +947,11 @@ impl Parser for GenericTypeAssignmentParser {
                 let kinds = tokens
                     .into_iter()
                     .map(|token| match token {
-                        Token::Kind(kind) => kind,
+                        Token::NamedKind(name, kind) => (name, kind),
                         _ => unreachable!(),
                     })
                     .collect();
-                vec![Token::GenericTypeAssignment(ident, kinds, typ)]
+                vec![Token::GenericTypeAssignment(ident, Kinds::new(kinds), typ)]
             },
         )
     }
@@ -935,6 +976,34 @@ impl Parser for TypeParser {
     }
 }
 
+#[derive(Clone, Debug)]
+struct RootTokenParser;
+
+impl Parser for RootTokenParser {
+    fn take<'a, 'b>(&'a self, input: &'b str) -> (Tokens, &'b str) {
+        repeat!(choose!(
+            TypeAliasParser,
+            GenericTypeAssignmentParser,
+            TypeAssignmentParser,
+            AssignmentParser
+        ))
+        .take(input)
+    }
+}
+
+pub fn parse_root_tokens(input: &str) -> Result<Vec<Token>, &str> {
+    match RootTokenParser.take(input) {
+        (Some(tokens), rest) => {
+            if rest.is_empty() {
+                Ok(tokens)
+            } else {
+                Err(rest)
+            }
+        }
+        (None, _) => Err(input),
+    }
+}
+
 pub fn parse_expression(input: &str) -> Option<(Token, &str)> {
     let (tokens, rest) = ExpressionParser.take(input);
     tokens.map(|mut ts| (ts.pop().unwrap(), rest))
@@ -943,8 +1012,4 @@ pub fn parse_expression(input: &str) -> Option<(Token, &str)> {
 pub fn parse_type(input: &str) -> Option<(Token, &str)> {
     let (tokens, rest) = TypeParser.take(input);
     tokens.map(|mut ts| (ts.pop().unwrap(), rest))
-}
-
-pub fn parse_ws(input: &str) -> &str {
-    optional(WsParser).take(input).1
 }
