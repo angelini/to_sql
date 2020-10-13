@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use crate::base;
-use crate::base::{ColumnName, Identifier, Kind, Kinds, TypeName};
+use crate::base::{ColumnName, Constant, Identifier, Kind, Kinds, TypeName};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Base {
@@ -43,7 +43,7 @@ impl Column {
         match (self, other) {
             (Column::Known(expected), Column::Known(actual)) => expected.captures(actual),
             (Column::Unknown(_, _), _) => true,
-            _ => unimplemented!()
+            _ => unimplemented!(),
         }
     }
 }
@@ -112,6 +112,17 @@ pub enum Type {
 }
 
 impl Type {
+    pub fn from_constant(value: &Constant) -> Self {
+        let base = match value {
+            Constant::Bool(_) => Base::Bool(false),
+            Constant::Int(_) => Base::Int(false),
+            Constant::Float(_) => Base::Float(false),
+            Constant::String(_) => Base::String(false),
+            Constant::Date(_) => Base::Date(false),
+        };
+        Type::Value(Primitive::Known(base))
+    }
+
     pub fn captures(&self, actual: &Self) -> bool {
         match (self, actual) {
             (Type::Value(Primitive::Known(expected)), Type::Value(Primitive::Known(actual)))
@@ -212,16 +223,13 @@ struct BoundType {
 
 impl BoundType {
     fn new(kinds: Kinds, typ: Type) -> BoundType {
-        BoundType {
-            kinds: kinds,
-            typ: typ,
-        }
+        BoundType { kinds, typ }
     }
 
     fn from_type(typ: Type) -> BoundType {
         BoundType {
+            typ,
             kinds: Kinds::empty(),
-            typ: typ,
         }
     }
 }

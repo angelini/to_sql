@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use chrono::naive::NaiveDate;
 use lazy_static::lazy_static;
 use regex::Regex;
+use rust_decimal::Decimal;
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ColumnName(String);
@@ -115,4 +117,13 @@ pub fn kinds<S: Into<String>>(values: Vec<(S, Kind)>) -> Kinds {
             .map(|(name, kind)| (type_name(name), kind))
             .collect(),
     )
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Constant {
+    Bool(bool),
+    Int(usize),
+    Float(Decimal),
+    String(String),
+    Date(NaiveDate),
 }

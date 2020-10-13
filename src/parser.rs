@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt;
 use std::str::FromStr;
 
 use chrono::naive::NaiveDate;
@@ -7,8 +8,7 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use rust_decimal::Decimal;
 
-use crate::ast::Constant;
-use crate::base::{ColumnName, Identifier, Kind, Kinds, TypeName};
+use crate::base::{ColumnName, Constant, Identifier, Kind, Kinds, TypeName};
 
 pub type RowValue = BTreeMap<ColumnName, Token>;
 pub type RowType = BTreeMap<ColumnName, TypeName>;
@@ -991,16 +991,31 @@ impl Parser for RootTokenParser {
     }
 }
 
-pub fn parse_root_tokens(input: &str) -> Result<Vec<Token>, &str> {
+#[derive(Debug)]
+pub struct ParseError(String);
+
+impl ParseError {
+    pub fn from_str<S: Into<String>>(value: S) -> Self {
+        ParseError(value.into())
+    }
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "{}", self.0)
+    }
+}
+
+pub fn parse(input: &str) -> Result<Vec<Token>, ParseError> {
     match RootTokenParser.take(input) {
         (Some(tokens), rest) => {
             if rest.is_empty() {
                 Ok(tokens)
             } else {
-                Err(rest)
+                Err(ParseError::from_str(rest))
             }
         }
-        (None, _) => Err(input),
+        (None, _) => Err(ParseError::from_str(input)),
     }
 }
 

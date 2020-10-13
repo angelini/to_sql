@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
-use crate::ast::{Constant, Expression};
-use crate::base::{self, ColumnName, Identifier};
+use crate::ast::{Ast, Expression};
+use crate::base::{self, ColumnName, Constant, Identifier};
 use crate::types::{RowSchema, Type};
 
 #[derive(Clone, Debug)]
@@ -79,10 +79,10 @@ fn execute(scope: &Scope, expression: Expression) -> Result<Value> {
     }
 }
 
-pub fn run(expressions: BTreeMap<Identifier, Expression>) -> Result<Value> {
+pub fn run(ast: Ast) -> Result<Value> {
     let mut scope = Scope::root();
 
-    for (ident, expression) in expressions {
+    for (ident, expression) in ast.expressions() {
         let value = execute(&scope, expression)?;
         scope.values.insert(ident, value);
     }
