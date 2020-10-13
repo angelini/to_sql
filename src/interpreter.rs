@@ -2,14 +2,14 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use crate::ast::{Constant, Expression};
-use crate::base::{ColumnName, Identifier};
+use crate::base::{self, ColumnName, Identifier};
 use crate::types::{RowSchema, Type};
 
 #[derive(Clone, Debug)]
-struct TableName(String, String);
+pub struct TableName(String, String);
 
 #[derive(Clone, Debug)]
-struct Table {
+pub struct Table {
     exists: bool,
     name: Option<String>,
     schema: RowSchema,
@@ -18,7 +18,7 @@ struct Table {
 }
 
 #[derive(Clone, Debug)]
-enum Value {
+pub enum Value {
     Primitive(Constant),
     Row(BTreeMap<ColumnName, Value>),
     Column(TableName, ColumnName, Type),
@@ -32,6 +32,13 @@ struct Scope {
 }
 
 impl Scope {
+    pub fn root() -> Self {
+        Scope {
+            parent: None,
+            values: HashMap::new(),
+        }
+    }
+
     fn lookup(&self, ident: &Identifier) -> Option<&Value> {
         self.values.get(ident).or_else(|| match &self.parent {
             Some(parent) => parent.lookup(ident),
@@ -40,7 +47,8 @@ impl Scope {
     }
 }
 
-enum ExecutionError {
+#[derive(Clone, Debug)]
+pub enum ExecutionError {
     MissingIdentifier(Identifier),
 }
 
@@ -69,4 +77,15 @@ fn execute(scope: &Scope, expression: Expression) -> Result<Value> {
         )),
         _ => unimplemented!(),
     }
+}
+
+pub fn run(expressions: BTreeMap<Identifier, Expression>) -> Result<Value> {
+    let mut scope = Scope::root();
+
+    for (ident, expression) in expressions {
+        let value = execute(&scope, expression)?;
+        scope.values.insert(ident, value);
+    }
+
+    Ok(scope.values.remove(&base::ident("main")).unwrap())
 }

@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use ast::Expression;
-use base::{ColumnName, Identifier};
+use base::{ColumnName, Identifier, Kind, Kinds};
 use parser::Token;
 use types::{Column, Primitive, Row, Type, TypeContext, TypeError};
 
@@ -65,35 +65,42 @@ impl Runtime {
         }
     }
 
-    fn add_type_token(&mut self, token: Token) -> Result<()> {
-        match token {
-            Token::TypeAssignment(ident, type_token) => {
-                self.types.add(ident, self.as_type(*type_token)?)
+    fn add_tokens(&mut self, tokens: Vec<Token>) -> Result<()> {
+        for token in tokens {
+            match token {
+                Token::TypeAssignment(ident, type_token) => self.types.add(
+                    ident,
+                    Kinds::empty(),
+                    self.as_type(&Kinds::empty(), *type_token)?,
+                ),
+                Token::GenericTypeAssignment(ident, kinds, type_token) => {
+                    let typ = self.as_type(&kinds, *type_token)?;
+                    self.types.add(ident, kinds, typ);
+                }
+                Token::TypeAlias(new_name, type_token) => {
+                    self.types
+                        .alias(new_name, self.as_type(&Kinds::empty(), *type_token)?);
+                }
+                Token::Assignment(ident, expression_token) => {
+                    let expression = self.as_expression(*expression_token)?;
+                    expression.check_type(&self.types, self.types.get(&ident)?)?;
+                    self.impls.insert(ident, expression);
+                }
+                _ => unreachable!(),
             }
-
-            Token::TypeAlias(new_name, type_token) => {
-                self.types.alias(new_name, self.as_type(*type_token)?)
-            }
-            _ => return Err(InputError::InvalidRoot(token)),
-        };
+        }
         Ok(())
     }
 
-    fn add_expression_token(&mut self, token: Token) -> Result<()> {
-        match token {
-            Token::Assignment(ident, expression_token) => {
-                let expression = self.as_expression(*expression_token)?;
-                expression.check_type(&self.types, self.types.get(&ident)?)?;
-                self.impls.insert(ident, expression)
-            }
-            _ => return Err(InputError::InvalidRoot(token)),
-        };
-        Ok(())
-    }
-
-    fn as_type(&self, token: Token) -> Result<Type> {
+    fn as_type(&self, kinds: &Kinds, token: Token) -> Result<Type> {
         Ok(match token {
-            Token::TypeName(name) => self.types.lookup_alias(&name)?.clone(),
+            Token::TypeName(name) => {
+                match kinds.get(&name) {
+                    Some(Kind::Primitive) => Type::Value(Primitive::Unknown(name, false)),
+                    Some(Kind::Row) => Type::Row(Row::Unknown(name)),
+                    None => self.types.lookup_alias(&name)?.clone()
+                }
+            }
             Token::GenericTypeName(mut names) => {
                 let root = names.remove(0);
                 let nested = if names.len() > 1 {
@@ -102,9 +109,13 @@ impl Runtime {
                     Token::TypeName(names.pop().unwrap())
                 };
 
-                match (root.as_str(), self.as_type(nested)?) {
+                dbg!(&nested);
+                match (root.as_str(), self.as_type(kinds, nested)?) {
                     ("Col", Type::Value(Primitive::Known(base))) => {
                         Type::Column(Column::Known(base))
+                    }
+                    ("Col", Type::Value(Primitive::Unknown(name, is_null))) => {
+                        Type::Column(Column::Unknown(name, is_null))
                     }
                     ("Table", Type::Row(row)) => Type::Table(row),
                     _ => unimplemented!(),
@@ -113,7 +124,7 @@ impl Runtime {
             Token::Union(variants) => {
                 let variant_types = variants
                     .into_iter()
-                    .map(|variant| Ok(self.as_type(variant)?))
+                    .map(|variant| Ok(self.as_type(kinds, variant)?))
                     .collect::<Result<Vec<Type>>>()?;
                 Type::Union(variant_types)
             }
@@ -129,9 +140,9 @@ impl Runtime {
             Token::FunctionType(argument_tokens, body_token) => {
                 let argument_types = argument_tokens
                     .into_iter()
-                    .map(|arg| Ok(self.as_type(arg)?))
+                    .map(|arg| Ok(self.as_type(kinds, arg)?))
                     .collect::<Result<Vec<Type>>>()?;
-                Type::Function(vec![], argument_types, Box::new(self.as_type(*body_token)?))
+                Type::Function(argument_types, Box::new(self.as_type(kinds, *body_token)?))
             }
             _ => unimplemented!(),
         })
@@ -141,9 +152,7 @@ impl Runtime {
         Ok(match token {
             Token::Constant(constant) => Expression::Constant(constant),
             Token::Identifier(ident) => Expression::Variable(ident),
-            Token::Let(ident, body) => {
-                Expression::Let(ident, Box::new(self.as_expression(*body)?))
-            }
+            Token::Let(ident, body) => Expression::Let(ident, Box::new(self.as_expression(*body)?)),
             Token::Application(ident, arguments) => Expression::Application(
                 ident,
                 arguments
@@ -187,32 +196,8 @@ impl fmt::Display for Runtime {
     }
 }
 
-fn parse_input(input: &str) -> Result<(Vec<Token>, Vec<Token>)> {
-    let mut type_tokens = vec![];
-    let mut expression_tokens = vec![];
-    let mut remaining = input;
-
-    loop {
-        remaining = parser::parse_ws(remaining);
-
-        if remaining.is_empty() {
-            return Ok((type_tokens, expression_tokens));
-        }
-
-        if let Some((token, rest)) = parser::parse_type(remaining) {
-            type_tokens.push(token);
-            remaining = rest;
-            continue;
-        }
-
-        if let Some((token, rest)) = parser::parse_expression(remaining) {
-            expression_tokens.push(token);
-            remaining = rest;
-            continue;
-        }
-
-        return Err(InputError::Parse(ParseError(remaining.to_string())));
-    }
+fn parse_input(input: &str) -> Result<Vec<Token>> {
+    parser::parse_root_tokens(input).map_err(|rest| InputError::Parse(ParseError(rest.to_string())))
 }
 
 fn main() -> Result<()> {
@@ -231,7 +216,7 @@ fn main() -> Result<()> {
         "foo.'baz'",
         "4.5",
         "4 == 4",
-        "5 >= 3 == 2"
+        "5 >= 3 == 2",
     ] {
         println!("Expression Input: {}", expression_input);
         match parser::parse_expression(expression_input) {
@@ -292,20 +277,30 @@ fn main() -> Result<()> {
 
         result :: Bool
         result = a == 5
+
+        gen :: P : Primitive :: Col<P>
+        gen = colInt(1)
+
+        main :: String
+        main = 'foo'
     ";
 
-    let (type_tokens, expression_tokens) = parse_input(input)?;
+    let tokens = parse_input(input)?;
     let mut runtime = Runtime::new();
-
-    for type_token in type_tokens {
-        runtime.add_type_token(type_token)?;
-    }
-
-    for expression_token in expression_tokens {
-        runtime.add_expression_token(expression_token)?;
-    }
-
+    runtime.add_tokens(tokens)?;
     println!("{}", runtime);
+
+    let input = "
+        main :: String
+        main = 'foo'
+    ";
+
+    let tokens = parse_input(input)?;
+    runtime = Runtime::new();
+    runtime.add_tokens(tokens)?;
+
+    let value = interpreter::run(runtime.impls);
+    println!("{:?}", value);
 
     Ok(())
 }

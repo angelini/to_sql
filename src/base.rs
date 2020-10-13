@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 
 use lazy_static::lazy_static;
@@ -72,4 +73,46 @@ pub fn type_name<S: Into<String>>(value_s: S) -> TypeName {
     let value = value_s.into();
     assert!(RE.is_match(&value), "Invalid type name");
     TypeName::new(value)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Kind {
+    Primitive,
+    Row,
+}
+
+impl Kind {
+    pub fn from_str(value: &str) -> Option<Kind> {
+        match value {
+            "Primitive" => Some(Kind::Primitive),
+            "Row" => Some(Kind::Row),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Kinds(HashMap<TypeName, Kind>);
+
+impl Kinds {
+    pub fn new(values: Vec<(TypeName, Kind)>) -> Self {
+        Kinds(values.into_iter().collect())
+    }
+
+    pub fn empty() -> Self {
+        Kinds(HashMap::new())
+    }
+
+    pub fn get(&self, name: &TypeName) -> Option<Kind> {
+        self.0.get(name).copied()
+    }
+}
+
+pub fn kinds<S: Into<String>>(values: Vec<(S, Kind)>) -> Kinds {
+    Kinds::new(
+        values
+            .into_iter()
+            .map(|(name, kind)| (type_name(name), kind))
+            .collect(),
+    )
 }
