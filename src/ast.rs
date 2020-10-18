@@ -10,9 +10,8 @@ pub enum Expression {
     Constant(Constant),
     Variable(Identifier),
     Row(BTreeMap<ColumnName, Expression>),
-    Let(Identifier, Box<Expression>),
     Application(Identifier, Vec<Expression>),
-    Block(Vec<Expression>, Box<Expression>),
+    Block(Vec<(Identifier, Type, Expression)>, Box<Expression>),
     Function(Vec<Identifier>, Box<Expression>),
 }
 
@@ -89,14 +88,11 @@ impl Expression {
                 }
             }
             (_, Expression::Block(assignments, last_expression)) => {
-                let nested_ctx = ctx.clone();
-                for assignment in assignments {
-                    match assignment {
-                        Expression::Let(ident, expression) => {
-                            expression.check_type(&nested_ctx, nested_ctx.get(ident)?)?
-                        }
-                        _ => unimplemented!(),
-                    }
+                // FIXME: cloning the entire type context
+                let mut nested_ctx = ctx.clone();
+                for (ident, typ, expr) in assignments {
+                    expr.check_type(&nested_ctx, typ)?;
+                    nested_ctx.add(ident.clone(), Kinds::empty(), typ.clone());
                 }
                 last_expression.check_type(&nested_ctx, expected)
             }
@@ -119,9 +115,12 @@ impl Expression {
     }
 }
 
+pub type Expressions = BTreeMap<Identifier, Expression>;
+
 #[derive(Debug)]
 pub enum InputError {
     Parse(ParseError),
+    InvalidBlockAssignment(Token),
     Type(TypeError),
 }
 
@@ -141,6 +140,9 @@ impl fmt::Display for InputError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             InputError::Parse(parse_error) => write!(f, "error parsing: '''\n{}\n'''", parse_error),
+            InputError::InvalidBlockAssignment(token) => {
+                write!(f, "invalid block assignment: {:?}", token)
+            }
             InputError::Type(type_error) => write!(f, "type error: {}", type_error),
         }
     }
@@ -163,7 +165,6 @@ fn token_to_type(type_ctx: &TypeContext, kinds: &Kinds, token: Token) -> Result<
                 Token::TypeName(names.pop().unwrap())
             };
 
-            dbg!(&nested);
             match (root.as_str(), token_to_type(type_ctx, kinds, nested)?) {
                 ("Col", Type::Value(Primitive::Known(base))) => Type::Column(Column::Known(base)),
                 ("Col", Type::Value(Primitive::Unknown(name, is_null))) => {
@@ -203,52 +204,60 @@ fn token_to_type(type_ctx: &TypeContext, kinds: &Kinds, token: Token) -> Result<
     })
 }
 
-fn token_to_expression(token: Token) -> Result<Expression> {
+fn token_to_expression(type_ctx: &TypeContext, kinds: &Kinds, token: Token) -> Result<Expression> {
     Ok(match token {
         Token::Constant(constant) => Expression::Constant(constant),
         Token::Identifier(ident) => Expression::Variable(ident),
-        Token::Let(ident, body) => Expression::Let(ident, Box::new(token_to_expression(*body)?)),
         Token::Application(ident, arguments) => Expression::Application(
             ident,
             arguments
                 .into_iter()
-                .map(|arg| Ok(token_to_expression(arg)?))
+                .map(|arg| Ok(token_to_expression(type_ctx, kinds, arg)?))
                 .collect::<Result<Vec<Expression>>>()?,
         ),
         Token::RowValue(row_tokens) => {
             let row_expressions = row_tokens
                 .into_iter()
-                .map(|(col_name, expr_token)| Ok((col_name, token_to_expression(expr_token)?)))
+                .map(|(col_name, expr_token)| {
+                    Ok((col_name, token_to_expression(type_ctx, kinds, expr_token)?))
+                })
                 .collect::<Result<BTreeMap<ColumnName, Expression>>>()?;
             Expression::Row(row_expressions)
         }
         Token::Block(mut expressions) => {
-            let last = token_to_expression(expressions.pop().unwrap())?;
-            Expression::Block(
-                expressions
-                    .into_iter()
-                    .map(|expr| Ok(token_to_expression(expr)?))
-                    .collect::<Result<Vec<Expression>>>()?,
-                Box::new(last),
-            )
+            let last = token_to_expression(type_ctx, kinds, expressions.pop().unwrap())?;
+            let assigments = expressions
+                .into_iter()
+                .map(|expr| match expr {
+                    Token::Let(ident, type_name, body) => Ok((
+                        ident,
+                        token_to_type(type_ctx, kinds, Token::TypeName(type_name))?,
+                        token_to_expression(type_ctx, kinds, *body)?,
+                    )),
+                    _ => return Err(InputError::InvalidBlockAssignment(expr)),
+                })
+                .collect::<Result<Vec<(Identifier, Type, Expression)>>>()?;
+
+            Expression::Block(assigments, Box::new(last))
         }
-        Token::Function(arguments, body) => {
-            Expression::Function(arguments, Box::new(token_to_expression(*body)?))
-        }
+        Token::Function(arguments, body) => Expression::Function(
+            arguments,
+            Box::new(token_to_expression(type_ctx, kinds, *body)?),
+        ),
         _ => unimplemented!(),
     })
 }
 
 #[derive(Debug)]
 pub struct Ast {
-    types: TypeContext,
-    impls: BTreeMap<Identifier, Expression>,
+    pub type_ctx: TypeContext,
+    pub expressions: Expressions,
 }
 
 impl Ast {
     pub fn from_tokens(tokens: Vec<Token>) -> Result<Self> {
         let mut type_ctx = types::std();
-        let mut impls = BTreeMap::new();
+        let mut expressions = Expressions::new();
 
         for token in tokens {
             match token {
@@ -268,30 +277,26 @@ impl Ast {
                     );
                 }
                 Token::Assignment(ident, expression_token) => {
-                    let expression = token_to_expression(*expression_token)?;
+                    let expression = token_to_expression(&type_ctx, &Kinds::empty(), *expression_token)?;
                     expression.check_type(&type_ctx, type_ctx.get(&ident)?)?;
-                    impls.insert(ident, expression);
+                    expressions.insert(ident, expression);
                 }
                 _ => unreachable!(),
             }
         }
 
         Ok(Ast {
-            types: type_ctx,
-            impls,
+            type_ctx,
+            expressions,
         })
-    }
-
-    pub fn expressions(self) -> BTreeMap<Identifier, Expression> {
-        self.impls
     }
 }
 
 impl fmt::Display for Ast {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "{}", self.types)?;
+        writeln!(f, "{}", self.type_ctx)?;
         writeln!(f, "Implementations:")?;
-        for (id, expression) in &self.impls {
+        for (id, expression) in &self.expressions {
             writeln!(f, "  {}: {:?}", id, expression)?;
         }
         write!(f, "")

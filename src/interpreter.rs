@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use crate::ast::{Ast, Expression};
-use crate::base::{self, ColumnName, Constant, Identifier};
+use crate::base::{self, ColumnName, Constant, Identifier, Scope};
 use crate::types::{RowSchema, Type};
 
 #[derive(Clone, Debug)]
@@ -23,50 +23,37 @@ pub enum Value {
     Row(BTreeMap<ColumnName, Value>),
     Column(TableName, ColumnName, Type),
     Table(Table),
-}
-
-#[derive(Clone, Debug)]
-struct Scope {
-    parent: Option<Box<Scope>>,
-    values: HashMap<Identifier, Value>,
-}
-
-impl Scope {
-    pub fn root() -> Self {
-        Scope {
-            parent: None,
-            values: HashMap::new(),
-        }
-    }
-
-    fn lookup(&self, ident: &Identifier) -> Option<&Value> {
-        self.values.get(ident).or_else(|| match &self.parent {
-            Some(parent) => parent.lookup(ident),
-            None => None,
-        })
-    }
+    Function(Vec<Identifier>, Expression),
 }
 
 #[derive(Clone, Debug)]
 pub enum ExecutionError {
     MissingIdentifier(Identifier),
+    NotAFunction(Identifier),
+    WrongNumberOfArguments(Identifier, usize, usize),
 }
 
 impl fmt::Display for ExecutionError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ExecutionError::MissingIdentifier(ident) => write!(f, "missing identifier: {}", ident),
+            ExecutionError::NotAFunction(ident) => write!(f, "not a function: {}", ident),
+            ExecutionError::WrongNumberOfArguments(ident, expected, actual) => write!(
+                f,
+                "wrong number of arguments for: {}, expected: {}, found: {}",
+                ident, expected, actual
+            ),
         }
     }
 }
 
 type Result<T> = std::result::Result<T, ExecutionError>;
 
-fn execute(scope: &Scope, expression: Expression) -> Result<Value> {
+fn execute(scope: &Scope<Value>, expression: Expression) -> Result<Value> {
     match expression {
         Expression::Constant(constant) => Ok(Value::Primitive(constant)),
         Expression::Variable(ident) => scope
-            .lookup(&ident)
+            .get(&ident)
             .cloned()
             .ok_or(ExecutionError::MissingIdentifier(ident)),
         Expression::Row(row_expressions) => Ok(Value::Row(
@@ -75,17 +62,52 @@ fn execute(scope: &Scope, expression: Expression) -> Result<Value> {
                 .map(|(column_name, expr)| Ok((column_name, execute(scope, expr)?)))
                 .collect::<Result<BTreeMap<ColumnName, Value>>>()?,
         )),
-        _ => unimplemented!(),
+        Expression::Application(ident, arguments) => {
+            let (arg_names, func_body) = match scope.get(&ident) {
+                Some(Value::Function(arg_names, expr)) => (arg_names, expr),
+                Some(_) => return Err(ExecutionError::NotAFunction(ident)),
+                _ => return Err(ExecutionError::MissingIdentifier(ident)),
+            };
+
+            if arg_names.len() != arguments.len() {
+                return Err(ExecutionError::WrongNumberOfArguments(
+                    ident,
+                    arg_names.len(),
+                    arguments.len(),
+                ));
+            }
+
+            let arg_values = arg_names
+                .into_iter()
+                .zip(arguments.into_iter())
+                .map(|(name, expr)| Ok((name.clone(), execute(scope, expr)?)))
+                .collect::<Result<HashMap<Identifier, Value>>>()?;
+
+            execute(&scope.descend(arg_values), func_body.clone())
+        }
+        Expression::Block(expressions, last_expr) => {
+            let mut nested_scope = scope.descend(HashMap::new());
+
+            for (ident, _, expr) in expressions {
+                let value = execute(&nested_scope, expr)?;
+                let mut assignments = HashMap::new();
+                assignments.insert(ident, value);
+                nested_scope = scope.descend(assignments);
+            }
+
+            execute(&nested_scope, *last_expr)
+        }
+        Expression::Function(idents, expr) => Ok(Value::Function(idents, *expr)),
     }
 }
 
 pub fn run(ast: Ast) -> Result<Value> {
     let mut scope = Scope::root();
 
-    for (ident, expression) in ast.expressions() {
+    for (ident, expression) in ast.expressions {
         let value = execute(&scope, expression)?;
-        scope.values.insert(ident, value);
+        scope.insert(ident, value);
     }
 
-    Ok(scope.values.remove(&base::ident("main")).unwrap())
+    Ok(scope.remove(&base::ident("main")).unwrap())
 }

@@ -97,12 +97,19 @@ fn main() -> Result<(), InputError> {
     println!("{}", ast);
 
     let input = "
-        main :: String
-        main = 'foo'
+        block :: Int
+        block = {
+            let a :: Int = 1;
+            a
+        }
+
+        main :: Int
+        main = block
     ";
 
     let tokens = parser::parse(input)?;
     let ast = Ast::from_tokens(tokens)?;
+    println!("{}", ast);
 
     let value = interpreter::run(ast);
     println!("{:?}", value);

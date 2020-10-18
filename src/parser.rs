@@ -20,7 +20,7 @@ pub enum Token {
     RowValue(RowValue),
     Block(Vec<Token>),
     Access(Identifier, ColumnName),
-    Let(Identifier, Box<Token>),
+    Let(Identifier, TypeName, Box<Token>),
     Application(Identifier, Vec<Token>),
     Function(Vec<Identifier>, Box<Token>),
 
@@ -564,17 +564,21 @@ impl Parser for LetParser {
                 WsParser,
                 IdentifierParser,
                 optional(WsParser),
+                fixed("::"),
+                optional(WsParser),
+                TypeNameParser,
+                optional(WsParser),
                 fixed("="),
                 optional(WsParser),
                 ExpressionParser
             )),
             |mut tokens| {
                 let expression = Box::new(tokens.pop().unwrap());
-                let ident = match tokens.pop() {
-                    Some(Token::Identifier(ident)) => ident,
+                let (ident, type_name) = match (tokens.remove(0), tokens.remove(0)) {
+                    (Token::Identifier(ident), Token::TypeName(type_name)) => (ident, type_name),
                     _ => unreachable!(),
                 };
-                vec![Token::Let(ident, expression)]
+                vec![Token::Let(ident, type_name, expression)]
             },
         )
     }

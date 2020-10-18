@@ -1,8 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
-use crate::base;
-use crate::base::{ColumnName, Constant, Identifier, Kind, Kinds, TypeName};
+use crate::base::{self, ColumnName, Constant, Identifier, Kind, Kinds, Scope, TypeName};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Base {
@@ -268,6 +267,10 @@ impl TypeContext {
             .get(id)
             .map(|bound| &bound.typ)
             .ok_or_else(|| TypeError::MissingAssignment(id.clone()))
+    }
+
+    pub fn scope<'a>(&'a self) -> Scope<'a, Type> {
+        unimplemented!()
     }
 }
 
