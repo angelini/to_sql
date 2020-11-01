@@ -1,0 +1,11 @@
+foo :: Int
+foo = {
+    a :: Int
+    let a = 1;
+    a
+}
+
+foo = {
+    let a :: Int = 1;
+    a
+}

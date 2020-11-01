@@ -22,8 +22,10 @@ pub enum Value {
     Primitive(Constant),
     Row(BTreeMap<ColumnName, Value>),
     Column(TableName, ColumnName, Type),
+    ConstantColumn(Type, Vec<Constant>),
     Table(Table),
     Function(Vec<Identifier>, Expression),
+    NativeFunction(fn(Vec<Value>) -> Value),
 }
 
 #[derive(Clone, Debug)]
@@ -101,8 +103,26 @@ fn execute(scope: &Scope<Value>, expression: Expression) -> Result<Value> {
     }
 }
 
+fn native_true(arguments: Vec<Value>) -> Value {
+    Value::Primitive(Constant::Bool(true))
+}
+
+fn native_as_const(mut arguments: Vec<Value>) -> Value {
+    let constant = match arguments.pop() {
+        Some(Value::Primitive(c)) => c,
+        _ => unreachable!()
+    };
+    Value::ConstantColumn(Type::from_constant(&constant), vec![constant])
+}
+
+fn std_column_functions<'a>(scope: &mut Scope<'a, Value>) {
+    scope.insert(base::ident("as_const"), Value::NativeFunction(native_as_const));
+}
+
 pub fn run(ast: Ast) -> Result<Value> {
     let mut scope = Scope::root();
+
+    std_column_functions(&mut scope);
 
     for (ident, expression) in ast.expressions {
         let value = execute(&scope, expression)?;

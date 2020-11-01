@@ -3,11 +3,14 @@ mod base;
 mod interpreter;
 mod parser;
 mod sql;
+mod std_lib;
 mod types;
 
 use ast::{Ast, InputError};
 
 fn main() -> Result<(), InputError> {
+    env_logger::init();
+
     for expression_input in &[
         "5",
         "hello_world",
@@ -85,9 +88,6 @@ fn main() -> Result<(), InputError> {
         result :: Bool
         result = a == 5
 
-        gen :: P : Primitive :: Col<P>
-        gen = colInt(1)
-
         main :: String
         main = 'foo'
     ";
@@ -103,9 +103,20 @@ fn main() -> Result<(), InputError> {
             a
         }
 
+        example :: X : Primitive :: (X) -> Col<X>
+        example = (value) -> col(value)
+
+        result :: Col<Int>
+        result = example(1)
+
         main :: Int
         main = block
     ";
+
+    // col = (value) -> {
+    //     let c :: Col<Int> = Col.from_constant(value);
+    //     c
+    // }
 
     let tokens = parser::parse(input)?;
     let ast = Ast::from_tokens(tokens)?;

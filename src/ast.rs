@@ -1,9 +1,11 @@
+use log::debug;
 use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::base::{ColumnName, Constant, Identifier, Kind, Kinds};
 use crate::parser::{ParseError, Token};
-use crate::types::{self, Column, Primitive, Row, Type, TypeContext, TypeError};
+use crate::std_lib;
+use crate::types::{Column, Primitive, RefinementContext, Row, Type, TypeContext, TypeError};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Expression {
@@ -20,7 +22,8 @@ impl Expression {
         &self,
         ctx: &TypeContext,
         expected: &Type,
-    ) -> std::result::Result<(), TypeError> {
+    ) -> std::result::Result<Type, TypeError> {
+        debug!("[check_type] Expect {:?} to be {:?}", self, expected);
         match (expected, self) {
             (Type::Value(_), Expression::Constant(constant)) => {
                 Self::compare_types(expected, &Type::from_constant(constant))
@@ -28,13 +31,10 @@ impl Expression {
             (Type::Union(variants), _) => {
                 for variant in variants {
                     if self.check_type(ctx, variant).is_ok() {
-                        return Ok(());
+                        return Ok(variant.clone());
                     }
                 }
-                Err(TypeError::UnexpectedType(
-                    expected.clone(),
-                    format!("{:?}", self),
-                ))
+                Err(Self::type_error(expected, self))
             }
             (Type::Row(Row::Known(row_type)), Expression::Row(row_value)) => {
                 if row_type.len() != row_value.len() {
@@ -53,12 +53,12 @@ impl Expression {
                             format!("{:?}", row_value),
                         ));
                     }
-                    act_expr.check_type(ctx, &Type::Column(exp_type.clone()))?
+                    act_expr.check_type(ctx, &Type::Column(exp_type.clone()))?;
                 }
-
-                Ok(())
+                Ok(expected.clone())
             }
             (Type::Function(arg_types, body_type), Expression::Function(arg_idents, body)) => {
+                // FIXME: cloning the entire type context
                 let mut nested_ctx = ctx.clone();
 
                 if arg_types.len() != arg_idents.len() {
@@ -71,18 +71,22 @@ impl Expression {
                 for (idx, arg_ident) in arg_idents.iter().enumerate() {
                     nested_ctx.add(arg_ident.clone(), Kinds::empty(), arg_types[idx].clone())
                 }
-                body.check_type(&nested_ctx, body_type)
+                body.check_type(&nested_ctx, body_type)?;
+                Ok(expected.clone())
             }
-
             (_, Expression::Variable(ident)) => Self::compare_types(expected, ctx.get(ident)?),
             (_, Expression::Application(ident, arg_expressions)) => {
                 if let Type::Function(expected_args, actual) = ctx.get(ident)? {
+                    let mut refinement = RefinementContext::new();
+
                     for (expression, expected_arg) in
                         arg_expressions.iter().zip(expected_args.iter())
                     {
-                        expression.check_type(ctx, expected_arg)?;
+                        let refined = expression.check_type(ctx, expected_arg)?;
+                        refinement.add(expected_arg, refined);
                     }
-                    Self::compare_types(expected, actual)
+
+                    Self::compare_types(&refinement.refine(expected), &refinement.refine(actual))
                 } else {
                     Err(TypeError::NotAFunction(ident.clone()))
                 }
@@ -96,22 +100,20 @@ impl Expression {
                 }
                 last_expression.check_type(&nested_ctx, expected)
             }
-            (_, _) => Err(TypeError::UnexpectedType(
-                expected.clone(),
-                format!("{:?}", self),
-            )),
+            (_, _) => Err(Self::type_error(expected, self)),
         }
     }
 
-    fn compare_types(expected: &Type, actual: &Type) -> std::result::Result<(), TypeError> {
+    fn compare_types(expected: &Type, actual: &Type) -> std::result::Result<Type, TypeError> {
         if expected.captures(actual) {
-            Ok(())
+            Ok(actual.clone())
         } else {
-            Err(TypeError::UnexpectedType(
-                expected.clone(),
-                format!("{:?}", actual),
-            ))
+            Err(Self::type_error(expected, actual))
         }
+    }
+
+    fn type_error<T: fmt::Debug>(expected: &Type, actual: T) -> TypeError {
+        TypeError::UnexpectedType(expected.clone(), format!("{:?}", actual))
     }
 }
 
@@ -256,7 +258,7 @@ pub struct Ast {
 
 impl Ast {
     pub fn from_tokens(tokens: Vec<Token>) -> Result<Self> {
-        let mut type_ctx = types::std();
+        let mut type_ctx = std_lib::type_context();
         let mut expressions = Expressions::new();
 
         for token in tokens {
@@ -277,7 +279,8 @@ impl Ast {
                     );
                 }
                 Token::Assignment(ident, expression_token) => {
-                    let expression = token_to_expression(&type_ctx, &Kinds::empty(), *expression_token)?;
+                    let expression =
+                        token_to_expression(&type_ctx, &Kinds::empty(), *expression_token)?;
                     expression.check_type(&type_ctx, type_ctx.get(&ident)?)?;
                     expressions.insert(ident, expression);
                 }

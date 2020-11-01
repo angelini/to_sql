@@ -1,0 +1,16 @@
+example :: P : Primitive :: P -> Col<P>
+example = (value) -> {
+    let c :: Col<Int> = col(value);
+    c
+}
+
+// col = Function([Unknown(Primitive("P"))], Column(Unknown(Primitive("P"))))
+
+result :: Col<Int>
+result = col(1)
+
+input :: Bool
+input = Bool
+
+other :: Col<Int>
+other = col(input)
